@@ -801,7 +801,10 @@
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
     import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, doc, setDoc, getDocs, collection, onSnapshot, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import {
+      getFirestore, doc, setDoc, getDocs, getDoc, collection, onSnapshot,
+      updateDoc, deleteDoc, runTransaction, writeBatch, arrayUnion
+    } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     // User's connected Firebase configuration
     const firebaseConfig = {
@@ -816,6 +819,20 @@
 
     let app, auth, db;
     let isFirebaseReady = false;
+    let menuSnapshotInitialized = false;
+    let menuSeedPromise = null;
+    let unsubscribeOrders = null;
+    let unsubscribeMenu = null;
+    let cloudErrorShown = false;
+
+    function setCloudConnectionStatus(label, connected = false) {
+      const indicator = document.getElementById('cloudStatusIndicator');
+      const text = document.getElementById('cloudStatusText');
+      if (text) text.textContent = label;
+      if (indicator) {
+        indicator.className = `hidden xs:flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border ${connected ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`;
+      }
+    }
 
     try {
       app = initializeApp(firebaseConfig);
@@ -1020,26 +1037,16 @@
       }
     }
 
-    // Instant cross-tab sync channel
-    let liveBroadcast = null;
-    try {
-      if (window.BroadcastChannel) {
-        liveBroadcast = new BroadcastChannel('cyberhunt_canteen_channel');
-        liveBroadcast.onmessage = (event) => {
-          if (event.data?.type === 'SYNC_ORDERS') {
-            syncIncomingOrders(event.data.orders, event.data.source);
-          }
-        };
-      }
-    } catch(e) {}
-
+    // Firestore onSnapshot listeners are the source of truth across browsers/devices.
     let knownOrderMap = new Map();
+    let hasInitialOrdersSnapshot = false;
 
     function syncIncomingOrders(newOrdersList, source = 'cloud') {
       if (!Array.isArray(newOrdersList)) return;
 
-      // Check for alerts before updating the state
-      if (knownOrderMap.size > 0) {
+      // Ignore only the initial snapshot; after that, even the very first new order
+      // should alert the kitchen if the collection was previously empty.
+      if (hasInitialOrdersSnapshot) {
         newOrdersList.forEach(incoming => {
           const previous = knownOrderMap.get(incoming.id);
 
@@ -1060,6 +1067,7 @@
       // Update map of known orders
       knownOrderMap.clear();
       newOrdersList.forEach(o => knownOrderMap.set(o.id, { ...o }));
+      hasInitialOrdersSnapshot = true;
 
       orders = newOrdersList;
       saveLocal();
@@ -1079,38 +1087,27 @@
       if (icon) icon.classList.add('fa-spin');
 
       try {
-        if (db && isFirebaseReady) {
-          const snapshot = await getDocs(collection(db, "orders"));
-          const cloudOrders = [];
-          snapshot.forEach(docSnap => cloudOrders.push(docSnap.data()));
-          cloudOrders.sort((a, b) => (b.token || 0) - (a.token || 0));
-          syncIncomingOrders(cloudOrders, 'manual');
-        } else {
-          // Re-read local storage
-          const savedOrders = localStorage.getItem(STORAGE_KEY_ORDERS);
-          if (savedOrders) syncIncomingOrders(JSON.parse(savedOrders), 'local');
+        if (!db || !isFirebaseReady) {
+          throw new Error('Firebase is not connected. Check the connection status and Firebase setup.');
         }
-        showToast("Live Sync Complete", "Synced with kitchen cloud server.", "success");
+        const snapshot = await getDocs(collection(db, "orders"));
+        const cloudOrders = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }));
+        cloudOrders.sort((a, b) => (Number(b.token) || 0) - (Number(a.token) || 0));
+        syncIncomingOrders(cloudOrders, 'manual');
+        showToast("Cloud Sync Complete", `${cloudOrders.length} order record(s) loaded from Firestore.`, "success");
       } catch (err) {
-        console.warn("Manual refresh fallback:", err);
+        console.error("Manual Firestore refresh failed:", err);
+        showToast("Sync Failed", err.message || "Could not read Firestore.", "error");
       } finally {
-        setTimeout(() => {
-          if (icon) icon.classList.remove('fa-spin');
-        }, 600);
+        setTimeout(() => { if (icon) icon.classList.remove('fa-spin'); }, 600);
       }
     };
 
     function isMyOrder(order, user) {
       if (!order || !user) return false;
-      const uEmail = (user.email || '').toLowerCase().trim();
-      const uName = (user.name || '').toLowerCase().trim();
-      const oEmail = (order.studentEmail || '').toLowerCase().trim();
-      const oName = (order.studentName || '').toLowerCase().trim();
-
-      return (uEmail && oEmail === uEmail) ||
-             (uName && oName === uName) ||
-             (uEmail && oName === uEmail) ||
-             (uName && oEmail === uName);
+      const userEmail = (user.email || '').toLowerCase().trim();
+      const orderEmail = (order.studentEmail || '').toLowerCase().trim();
+      return Boolean(userEmail && orderEmail && userEmail === orderEmail);
     }
 
     function calculateRushState() {
@@ -1687,62 +1684,83 @@
     async function submitStudentOrder(payMode = 'UPI') {
       const keys = Object.keys(studentCart);
       if (keys.length === 0) return;
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Not Ready", "Order not submitted. Wait until Firestore Live is connected and try again.", "error");
+        return;
+      }
+      if (!currentUser || currentUser.role !== 'student') {
+        showToast("Student Login Required", "Please sign in to place an order.", "warning");
+        return;
+      }
 
-      const orderItems = keys.map(k => ({
-        id: studentCart[k].item.id,
-        name: studentCart[k].item.name,
-        price: studentCart[k].item.price,
-        qty: studentCart[k].qty
-      }));
+      // Re-check current Firestore-backed menu state and prices before checkout.
+      const orderItems = [];
+      for (const k of keys) {
+        const liveItem = menuItems.find(item => item.id === k);
+        if (!liveItem || !liveItem.available) {
+          showToast("Item Unavailable", `"${studentCart[k]?.item?.name || k}" is now unavailable. Remove it from your tray.`, "error");
+          return;
+        }
+        const qty = Math.max(1, Math.floor(Number(studentCart[k].qty) || 1));
+        orderItems.push({ id: liveItem.id, name: liveItem.name, price: Number(liveItem.price), qty });
+      }
 
-      const totalPrice = keys.reduce((sum, k) => sum + (studentCart[k].item.price * studentCart[k].qty), 0);
-      const highestToken = orders.reduce((max, o) => Math.max(max, Number(o.token) || 100), 100);
-      const newToken = highestToken + 1;
-
-      const newOrder = {
-        id: `ORD-${newToken}`,
-        token: newToken,
-        studentEmail: currentUser.email || 'student',
+      const totalPrice = orderItems.reduce((sum, item) => sum + item.price * item.qty, 0);
+      const now = Date.now();
+      const paymentStatus = payMode === 'UPI' ? 'Paid' : 'Pending';
+      const baseOrder = {
+        studentEmail: (currentUser.email || 'student').toLowerCase().trim(),
         studentName: currentUser.name || 'Student',
         items: orderItems,
-        totalPrice: totalPrice,
+        totalPrice,
         paymentMode: payMode,
-        paymentStatus: payMode === 'UPI' ? 'Paid' : 'Pending',
+        paymentStatus,
         status: 'New',
-        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        timestamp: Date.now()
+        createdAt: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: now,
+        createdAtMs: now,
+        updatedAt: now,
+        statusHistory: [{ status: 'New', timestamp: now, actor: currentUser.email || 'student' }],
+        paymentHistory: [{ status: paymentStatus, mode: payMode, timestamp: now, actor: currentUser.email || 'student' }],
+        isDemo: false
       };
 
-      orders.unshift(newOrder);
-      studentCart = {};
-      saveLocal();
-
-      // Broadcast across tabs instantly
-      if (liveBroadcast) {
-        liveBroadcast.postMessage({ type: 'SYNC_ORDERS', orders: orders, source: 'student' });
-      }
-
-      renderTrayUI();
-      renderStudentCatalog();
-      renderStudentMetrics();
-      renderStudentPersonalOrders();
-      updateRushMeterUI();
-
-      document.getElementById('popupTokenNum').textContent = newOrder.token;
-      document.getElementById('popupTotalAmount').textContent = `₹${newOrder.totalPrice}`;
-      document.getElementById('popupPaymentMode').textContent = payMode === 'UPI' ? 'UPI (Paid)' : 'Cash at Counter (Pending)';
-      document.getElementById('orderSuccessModal').classList.remove('hidden');
-
-      showToast("Order Dispatched!", `Token #${newOrder.token} sent to Kitchen.`, "success");
-
-      // Write to Firestore immediately
       try {
-        if (db && isFirebaseReady) {
-          await setDoc(doc(db, "orders", newOrder.id), newOrder);
-        }
+        const newOrder = await createOrderInCloud(baseOrder);
+        orders = [newOrder, ...orders.filter(order => order.id !== newOrder.id)];
+        knownOrderMap.set(newOrder.id, { ...newOrder });
+        saveLocal();
+        studentCart = {};
+        renderTrayUI();
+        renderStudentCatalog();
+        renderStudentMetrics();
+        renderStudentPersonalOrders();
+        updateRushMeterUI();
+
+        document.getElementById('popupTokenNum').textContent = newOrder.token;
+        document.getElementById('popupTotalAmount').textContent = `₹${newOrder.totalPrice}`;
+        document.getElementById('popupPaymentMode').textContent = payMode === 'UPI' ? 'UPI (Paid - demo)' : 'Cash at Counter (Pending)';
+        document.getElementById('orderSuccessModal').classList.remove('hidden');
+        showToast("Order Saved to Cloud", `Ticket #${newOrder.token} is now visible on the staff devices.`, "success");
       } catch (err) {
-        console.warn("Firestore sync fallback to local cache:", err);
+        console.error("Order creation failed:", err);
+        showToast("Order Not Saved", err.message || "Firestore write failed. Your tray is unchanged; please retry.", "error");
       }
+    }
+
+    async function createOrderInCloud(orderBase) {
+      if (!db || !isFirebaseReady) throw new Error('Firestore is not connected.');
+      const counterRef = doc(db, 'meta', 'orderCounter');
+      return await runTransaction(db, async (transaction) => {
+        const counterSnap = await transaction.get(counterRef);
+        const previousToken = counterSnap.exists() ? Number(counterSnap.data().lastToken || 100) : 100;
+        const token = Math.max(100, previousToken) + 1;
+        const id = `ORD-${token}`;
+        const order = { ...orderBase, id, token };
+        transaction.set(counterRef, { lastToken: token, updatedAt: Date.now() }, { merge: true });
+        transaction.set(doc(db, 'orders', id), order);
+        return order;
+      });
     }
 
     window.closeSuccessModal = function() {
@@ -1904,47 +1922,51 @@
 
     window.updateOrderStatus = async function(orderId, newStatus) {
       const order = orders.find(o => o.id === orderId);
-      if (!order) return;
-
-      const previousStatus = order.status;
-      order.status = newStatus;
-      saveLocal();
-
-      // Broadcast immediately across all open tabs
-      if (liveBroadcast) {
-        liveBroadcast.postMessage({ type: 'SYNC_ORDERS', orders: orders, source: 'staff' });
+      const allowed = ['New', 'Preparing', 'Ready', 'Collected'];
+      if (!order || !allowed.includes(newStatus)) return;
+      if (currentUser?.role !== 'staff') {
+        showToast("Staff Only", "Only kitchen staff can update order status.", "error");
+        return;
+      }
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Unavailable", "Status was not changed. Reconnect to Firestore and retry.", "error");
+        return;
       }
 
-      renderStaffOrdersQueue();
-      updateStaffAnalytics();
-      updateRushMeterUI();
-
       try {
-        if (db && isFirebaseReady) {
-          await updateDoc(doc(db, "orders", orderId), { status: newStatus });
-        }
-      } catch(e) {}
-
-      showToast("Order Updated", `Token #${order.token} moved to ${newStatus}.`, "info");
+        const now = Date.now();
+        await updateDoc(doc(db, "orders", orderId), {
+          status: newStatus,
+          updatedAt: now,
+          statusUpdatedAt: now,
+          statusHistory: arrayUnion({ status: newStatus, timestamp: now, actor: currentUser.email || 'staff' })
+        });
+        showToast("Order Updated", `Ticket #${order.token} moved to ${newStatus}. All connected devices will update live.`, "success");
+      } catch (err) {
+        console.error("Order status update failed:", err);
+        showToast("Status Update Failed", err.message || "Could not update Firestore.", "error");
+      }
     };
 
     window.markCashCollected = async function(orderId) {
       const order = orders.find(o => o.id === orderId);
-      if (!order) return;
-
-      order.paymentStatus = 'Paid';
-      saveLocal();
-
-      renderStaffOrdersQueue();
-      updateStaffAnalytics();
-
+      if (!order || currentUser?.role !== 'staff') return;
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Unavailable", "Payment was not changed. Reconnect to Firestore and retry.", "error");
+        return;
+      }
       try {
-        if (db && isFirebaseReady) {
-          await updateDoc(doc(db, "orders", orderId), { paymentStatus: 'Paid' });
-        }
-      } catch(e) {}
-
-      showToast("Cash Collected", `₹${order.totalPrice} collected for Token #${order.token}`, "success");
+        const now = Date.now();
+        await updateDoc(doc(db, "orders", orderId), {
+          paymentStatus: 'Paid',
+          paymentUpdatedAt: now,
+          paymentHistory: arrayUnion({ status: 'Paid', mode: order.paymentMode || 'CASH', timestamp: now, actor: currentUser.email || 'staff' })
+        });
+        showToast("Cash Collected", `₹${order.totalPrice} collected for ticket #${order.token}.`, "success");
+      } catch (err) {
+        console.error("Cash collection update failed:", err);
+        showToast("Payment Update Failed", err.message || "Could not update Firestore.", "error");
+      }
     };
 
     function renderStaffOrdersQueue() {
@@ -1981,7 +2003,7 @@
                 <div class="flex items-center space-x-2 flex-wrap">
                   <h4 class="font-bold text-slate-900 text-xs sm:text-sm">${order.studentName}</h4>
                   <span class="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">${order.studentEmail || 'student'}</span>
-                  ${isActive ? '<span class="text-[9px] font-extrabold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-100">Cooking</span>' : '<span class="text-[9px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Collected</span>'}
+                  ${isActive ? `<span class="text-[9px] font-extrabold px-2 py-0.5 rounded-full border ${order.status === 'Ready' ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : order.status === 'Preparing' ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-blue-700 bg-blue-50 border-blue-200'}">${order.status}</span>` : '<span class="text-[9px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Collected</span>'}
                 </div>
                 <div class="text-[11px] sm:text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
                   <span>Time: <strong>${order.createdAt}</strong></span>
@@ -2049,23 +2071,25 @@
       `).join('');
     }
 
-    window.toggleItemStock = function(itemId) {
+    window.toggleItemStock = async function(itemId) {
       const item = menuItems.find(m => m.id === itemId);
-      if (!item) return;
-
-      item.available = !item.available;
-      saveLocal();
-
-      renderStaffStockTable();
-      renderStudentCatalog();
-
+      if (!item || currentUser?.role !== 'staff') return;
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Unavailable", "Menu was not changed. Reconnect to Firestore and retry.", "error");
+        return;
+      }
+      const nextAvailable = !item.available;
       try {
-        if (db && isFirebaseReady) {
-          updateDoc(doc(db, "menu", itemId), { available: item.available });
-        }
-      } catch(e) {}
-
-      showToast("Inventory Updated", `"${item.name}" is now ${item.available ? 'Available' : 'Out of Stock'}.`, "info");
+        await updateDoc(doc(db, "menu", itemId), {
+          available: nextAvailable,
+          updatedAt: Date.now(),
+          updatedBy: currentUser.email || 'staff'
+        });
+        showToast("Inventory Saved", `"${item.name}" will update on connected student devices.`, "success");
+      } catch (err) {
+        console.error("Menu availability update failed:", err);
+        showToast("Inventory Update Failed", err.message || "Could not update Firestore.", "error");
+      }
     };
 
     window.openNewDishModal = function() {
@@ -2076,36 +2100,51 @@
       document.getElementById('newDishModal').classList.add('hidden');
     };
 
-    window.saveNewDish = function() {
+    window.saveNewDish = async function() {
       const name = (document.getElementById('newDishName').value || '').trim();
       const price = parseFloat(document.getElementById('newDishPrice').value || 0);
       const cat = document.getElementById('newDishCat').value;
       const img = (document.getElementById('newDishImage').value || '').trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80';
       const desc = (document.getElementById('newDishDesc').value || '').trim() || 'Canteen chef special prepared fresh daily.';
 
-      if (!name || price <= 0) {
+      if (currentUser?.role !== 'staff') {
+        showToast("Staff Only", "Only canteen staff can add menu items.", "error");
+        return;
+      }
+      if (!name || !Number.isFinite(price) || price <= 0) {
         showToast("Invalid Input", "Please provide a valid dish name and price.", "warning");
+        return;
+      }
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Unavailable", "Dish was not saved. Reconnect to Firestore and retry.", "error");
         return;
       }
 
       const newDish = {
-        id: `dish-${Date.now()}`,
+        id: `dish-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name,
         price,
         category: cat,
         image: img,
         desc,
-        available: true
+        available: true,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        updatedBy: currentUser.email || 'staff'
       };
 
-      menuItems.unshift(newDish);
-      saveLocal();
-
-      window.closeNewDishModal();
-      renderStaffStockTable();
-      renderStudentCatalog();
-
-      showToast("Dish Added", `"${name}" added to canteen menu!`, "success");
+      try {
+        await setDoc(doc(db, "menu", newDish.id), newDish);
+        window.closeNewDishModal();
+        document.getElementById('newDishName').value = '';
+        document.getElementById('newDishPrice').value = '';
+        document.getElementById('newDishImage').value = '';
+        document.getElementById('newDishDesc').value = '';
+        showToast("Dish Saved to Cloud", `"${name}" is now available to all connected devices.`, "success");
+      } catch (err) {
+        console.error("New menu item save failed:", err);
+        showToast("Dish Not Saved", err.message || "Could not save the menu item to Firestore.", "error");
+      }
     };
 
     function updateStaffAnalytics() {
@@ -2120,52 +2159,69 @@
       if (revEl) revEl.textContent = `₹${revenue} Collected Sales`;
     }
 
-    window.injectJudgeSurge = function(qty) {
+    window.injectJudgeSurge = async function(qty) {
+      if (currentUser?.role !== 'staff') {
+        showToast("Staff Only", "Only staff can run the judge simulator.", "error");
+        return;
+      }
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Unavailable", "Demo orders were not created. Reconnect to Firestore and retry.", "error");
+        return;
+      }
       const sampleDishes = [
         { name: 'Crispy Samosa (2 pcs)', price: 30 },
         { name: 'Cheese Veg Burger', price: 75 },
         { name: 'Butter Masala Dosa', price: 85 }
       ];
-
-      for (let i = 0; i < qty; i++) {
-        const dish = sampleDishes[i % sampleDishes.length];
-        const highestToken = orders.reduce((max, o) => Math.max(max, Number(o.token) || 100), 100);
-        const newToken = highestToken + 1;
-
-        orders.unshift({
-          id: `ORD-${newToken}`,
-          token: newToken,
-          studentEmail: `judge_demo_${i + 1}@campus.edu`,
-          studentName: `Judge Student #${i + 1}`,
-          items: [{ id: 'sample', name: dish.name, price: dish.price, qty: 1 }],
-          totalPrice: dish.price,
-          paymentMode: 'UPI',
-          paymentStatus: 'Paid',
-          status: i % 2 === 0 ? 'New' : 'Preparing',
-          createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          timestamp: Date.now()
-        });
+      try {
+        for (let i = 0; i < qty; i++) {
+          const dish = sampleDishes[i % sampleDishes.length];
+          const now = Date.now();
+          await createOrderInCloud({
+            studentEmail: `judge_demo_${now}_${i + 1}@campus.invalid`,
+            studentName: `Judge Demo #${i + 1}`,
+            items: [{ id: 'sample', name: dish.name, price: dish.price, qty: 1 }],
+            totalPrice: dish.price,
+            paymentMode: 'UPI',
+            paymentStatus: 'Paid',
+            status: i % 2 === 0 ? 'New' : 'Preparing',
+            createdAt: new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: now,
+            createdAtMs: now,
+            updatedAt: now,
+            statusHistory: [{ status: i % 2 === 0 ? 'New' : 'Preparing', timestamp: now, actor: currentUser.email || 'staff' }],
+            isDemo: true
+          });
+        }
+        showToast("Demo Orders Saved", `+${qty} judge test ticket(s) saved to Firestore and shared across devices.`, "success");
+      } catch (err) {
+        console.error("Judge surge failed:", err);
+        showToast("Demo Order Failed", err.message || "Could not create demo tickets.", "error");
       }
-
-      saveLocal();
-      renderStaffOrdersQueue();
-      updateStaffAnalytics();
-      updateRushMeterUI();
-
-      showToast("Surge Simulated", `Injected +${qty} active orders for judge testing.`, "info");
     };
 
-    window.resetAllDemoData = function() {
-      orders = [];
-      saveLocal();
-      renderStaffOrdersQueue();
-      updateStaffAnalytics();
-      updateRushMeterUI();
-      if (currentUser?.role === 'student') {
-        renderStudentMetrics();
-        renderStudentPersonalOrders();
+    window.resetAllDemoData = async function() {
+      if (currentUser?.role !== 'staff') {
+        showToast("Staff Only", "Only staff can reset demo tickets.", "error");
+        return;
       }
-      showToast("Queue Reset", "All active and past orders cleared.", "info");
+      const demoOrders = orders.filter(o => o.isDemo === true || (o.studentEmail || '').startsWith('judge_demo_'));
+      if (!demoOrders.length) {
+        showToast("No Demo Tickets", "There are no judge-simulator tickets to remove.", "info");
+        return;
+      }
+      if (!window.confirm(`Delete ${demoOrders.length} judge-simulator ticket(s) from all devices? Real student orders will be kept.`)) return;
+      if (!db || !isFirebaseReady) {
+        showToast("Cloud Unavailable", "Demo tickets were not deleted. Reconnect to Firestore and retry.", "error");
+        return;
+      }
+      try {
+        await Promise.all(demoOrders.map(order => deleteDoc(doc(db, "orders", order.id))));
+        showToast("Demo Tickets Removed", "Judge-simulator tickets were deleted from Firestore on all devices.", "success");
+      } catch (err) {
+        console.error("Demo order cleanup failed:", err);
+        showToast("Cleanup Failed", err.message || "Could not delete all demo tickets.", "error");
+      }
     };
 
     function saveLocal() {
@@ -2195,71 +2251,118 @@
       } catch(e) {}
     }
 
-    async function startCloudBackend() {
-      initAppState();
-
-      if (auth) {
-        try {
-          await signInAnonymously(auth);
-          isFirebaseReady = true;
-
-          const ind = document.getElementById('cloudStatusText');
-          if (ind) ind.textContent = "Firestore Live";
-
-          onSnapshot(collection(db, "orders"), (snapshot) => {
-            if (!snapshot.empty) {
-              const cloudOrders = [];
-              snapshot.forEach(docSnap => cloudOrders.push(docSnap.data()));
-              cloudOrders.sort((a, b) => (b.token || 0) - (a.token || 0));
-              syncIncomingOrders(cloudOrders, 'cloud');
-            }
-          }, (err) => console.warn("Orders listener fallback:", err));
-
-          // Background auto-sync polling every 3 seconds to guarantee zero drop
-          setInterval(async () => {
-            try {
-              if (db && isFirebaseReady) {
-                const snap = await getDocs(collection(db, "orders"));
-                if (!snap.empty) {
-                  const cloudOrders = [];
-                  snap.forEach(d => cloudOrders.push(d.data()));
-                  cloudOrders.sort((a, b) => (b.token || 0) - (a.token || 0));
-                  syncIncomingOrders(cloudOrders, 'poll');
-                }
-              }
-            } catch(e) {}
-          }, 3000);
-        } catch (err) {
-          console.warn("Firebase Auth / Firestore offline fallback:", err);
-          const ind = document.getElementById('cloudStatusText');
-          if (ind) ind.textContent = "Local Synced";
-        }
-      }
-
-      updateRushMeterUI();
-
-      if (currentUser) {
-        const authScreen = document.getElementById('authScreen');
-        if (authScreen) authScreen.classList.add('hidden');
-        renderDashboardForCurrentRole();
-      }
+    async function seedMenuIfEmpty() {
+      if (menuSeedPromise) return menuSeedPromise;
+      menuSeedPromise = (async () => {
+        const existing = await getDocs(collection(db, 'menu'));
+        if (!existing.empty) return;
+        const batch = writeBatch(db);
+        INITIAL_MENU.forEach(item => {
+          batch.set(doc(db, 'menu', item.id), { ...item, createdAt: Date.now(), updatedAt: Date.now() }, { merge: true });
+        });
+        await batch.commit();
+      })().catch(err => {
+        menuSeedPromise = null;
+        throw err;
+      });
+      return menuSeedPromise;
     }
 
-    window.addEventListener('storage', (e) => {
-      if (e.key === STORAGE_KEY_ORDERS) {
-        try {
-          orders = JSON.parse(e.newValue || '[]');
-          updateRushMeterUI();
-          if (currentUser?.role === 'student') {
-            renderStudentMetrics();
-            renderStudentPersonalOrders();
-          } else if (currentUser?.role === 'staff') {
-            renderStaffOrdersQueue();
-            updateStaffAnalytics();
+    async function ensureOrderCounter() {
+      // Preserve existing ticket numbers when upgrading a previously used Firestore project.
+      const existingOrders = await getDocs(collection(db, 'orders'));
+      const maxExistingToken = existingOrders.docs.reduce((max, snap) => {
+        const data = snap.data();
+        return Math.max(max, Number(data.token) || 0);
+      }, 100);
+      const counterRef = doc(db, 'meta', 'orderCounter');
+      await runTransaction(db, async transaction => {
+        const counterSnap = await transaction.get(counterRef);
+        if (!counterSnap.exists()) {
+          transaction.set(counterRef, { lastToken: maxExistingToken, updatedAt: Date.now() });
+        } else {
+          const currentToken = Number(counterSnap.data().lastToken) || 100;
+          if (currentToken < maxExistingToken) {
+            transaction.update(counterRef, { lastToken: maxExistingToken, updatedAt: Date.now() });
           }
-        } catch(err) {}
+        }
+      });
+    }
+
+    async function startCloudBackend() {
+      initAppState();
+      setCloudConnectionStatus('Connecting…', false);
+
+      if (!app || !auth || !db) {
+        setCloudConnectionStatus('Firebase setup error', false);
+        showToast('Firebase Setup Error', 'Could not initialize Firebase. Check the config and browser console.', 'error');
+        return;
       }
-    });
+
+      try {
+        if (!auth.currentUser) await signInAnonymously(auth);
+        await ensureOrderCounter();
+        isFirebaseReady = true;
+        setCloudConnectionStatus('Firestore Live', true);
+
+        unsubscribeOrders = onSnapshot(collection(db, 'orders'), (snapshot) => {
+          const cloudOrders = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }));
+          cloudOrders.sort((a, b) => (Number(b.token) || 0) - (Number(a.token) || 0));
+          syncIncomingOrders(cloudOrders, 'cloud');
+          setCloudConnectionStatus('Firestore Live', true);
+        }, (err) => {
+          console.error('Firestore orders listener failed:', err);
+          isFirebaseReady = false;
+          setCloudConnectionStatus('Order sync error', false);
+          if (!cloudErrorShown) {
+            cloudErrorShown = true;
+            showToast('Order Sync Error', err.message || 'Could not read orders from Firestore.', 'error');
+          }
+        });
+
+        unsubscribeMenu = onSnapshot(collection(db, 'menu'), async (snapshot) => {
+          if (snapshot.empty && !menuSnapshotInitialized) {
+            try {
+              await seedMenuIfEmpty();
+            } catch (err) {
+              console.error('Initial menu seed failed:', err);
+              setCloudConnectionStatus('Menu sync error', false);
+              if (!cloudErrorShown) {
+                cloudErrorShown = true;
+                showToast('Menu Sync Error', err.message || 'Could not initialize the menu in Firestore.', 'error');
+              }
+            }
+            return;
+          }
+          menuSnapshotInitialized = true;
+          menuItems = snapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }));
+          saveLocal();
+          renderStudentCatalog();
+          renderTrayUI();
+          if (currentUser?.role === 'staff') renderStaffStockTable();
+          setCloudConnectionStatus('Firestore Live', true);
+        }, (err) => {
+          console.error('Firestore menu listener failed:', err);
+          isFirebaseReady = false;
+          setCloudConnectionStatus('Menu sync error', false);
+          if (!cloudErrorShown) {
+            cloudErrorShown = true;
+            showToast('Menu Sync Error', err.message || 'Could not read menu from Firestore.', 'error');
+          }
+        });
+
+        if (currentUser) {
+          const authScreen = document.getElementById('authScreen');
+          if (authScreen) authScreen.classList.add('hidden');
+          renderDashboardForCurrentRole();
+        }
+      } catch (err) {
+        console.error('Firebase Auth / Firestore startup failed:', err);
+        isFirebaseReady = false;
+        setCloudConnectionStatus('Firebase error', false);
+        showToast('Firebase Connection Failed', `${err.message || 'Could not connect.'} Enable Anonymous sign-in and publish the Firestore rules.`, 'error');
+      }
+    }
 
     window.addEventListener('DOMContentLoaded', () => {
       startCloudBackend();
