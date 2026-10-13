@@ -1,0 +1,2617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Cyberhunt CanteenPulse | Smart Canteen Order & Rush Tracker</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome 6 Pro / Free CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <!-- Firebase Web SDK (compat build works with this single-file HTML app) -->
+  <script src="https://www.gstatic.com/firebasejs/13.0.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/13.0.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore-compat.js"></script>
+
+  <!-- Google Fonts: Plus Jakarta Sans & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+            display: ['"Outfit"', 'sans-serif'],
+          },
+          colors: {
+            brand: {
+              50: '#fff7ed',
+              100: '#ffedd5',
+              500: '#f97316',
+              600: '#ea580c',
+              700: '#c2410c',
+              800: '#9a3412',
+              900: '#7c2d12',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Food backdrop & 3D Login Transitions */
+    .food-bg {
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.93) 0%, rgba(30, 41, 59, 0.90) 100%), 
+                  url('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=1920&q=80') center/cover no-repeat;
+    }
+    
+    .login-wrapper {
+      perspective: 1200px;
+      transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    
+    .login-card-3d {
+      transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.4s ease;
+      transform-style: preserve-3d;
+    }
+
+    .dismiss-auth {
+      transform: perspective(1000px) rotateX(15deg) translateY(-80px) scale(0.92);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Gauge Needle Transition */
+    .gauge-needle {
+      transition: transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
+      transform-origin: 100px 92px;
+    }
+
+    /* Glow pulse effects */
+    @keyframes rushPulseRing {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); }
+      70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+    .rush-high-glow {
+      animation: rushPulseRing 1.6s infinite;
+    }
+
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    
+    /* Touch target optimizations */
+    button, input, select {
+      touch-action: manipulation;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-800 font-sans min-h-screen flex flex-col antialiased selection:bg-orange-500 selection:text-white overflow-x-hidden">
+
+  <!-- =========================================================================
+       LANDING & AUTHENTICATION OVERLAY
+       ========================================================================= -->
+  <div id="authScreen" class="fixed inset-0 z-50 food-bg flex items-center justify-center p-3 sm:p-6 login-wrapper backdrop-blur-sm overflow-y-auto">
+    <div id="authCard" class="bg-white/95 backdrop-blur-xl border border-white/30 rounded-3xl shadow-2xl max-w-md w-full p-5 sm:p-8 login-card-3d relative overflow-hidden my-auto">
+      
+      <!-- Gradient Bar -->
+      <div class="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-600"></div>
+
+      <!-- Header Icon & Branding -->
+      <div class="text-center mb-5">
+        <div class="inline-flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 text-white text-xl sm:text-2xl shadow-lg shadow-orange-500/30 mb-2">
+          <i class="fa-solid fa-utensils"></i>
+        </div>
+        <div class="flex items-center justify-center space-x-2">
+          <h1 class="text-xl sm:text-2xl font-display font-black text-slate-900 tracking-tight">Cyberhunt CanteenPulse</h1>
+          <span class="text-[10px] font-bold uppercase tracking-wider bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full border border-orange-200">v2.1</span>
+        </div>
+        <p class="text-[11px] sm:text-xs text-slate-500 mt-1">Smart Canteen Ordering & Live Kitchen Rush Telemetry</p>
+      </div>
+
+      <!-- Role Tabs: Student vs Staff -->
+      <div class="flex p-1 bg-slate-100 rounded-xl mb-5 border border-slate-200">
+        <button id="authTabStudent" onclick="switchAuthRole('student')" class="flex-1 py-2 rounded-lg text-xs font-bold transition-all bg-white text-orange-600 shadow-sm flex items-center justify-center space-x-1.5">
+          <i class="fa-solid fa-graduation-cap"></i>
+          <span>Student Portal</span>
+        </button>
+        <button id="authTabStaff" onclick="switchAuthRole('staff')" class="flex-1 py-2 rounded-lg text-xs font-bold transition-all text-slate-500 hover:text-slate-800 flex items-center justify-center space-x-1.5">
+          <i class="fa-solid fa-fire-burner"></i>
+          <span>Kitchen Staff</span>
+        </button>
+      </div>
+
+      <!-- STUDENT AUTH FORM -->
+      <div id="studentAuthContainer" class="space-y-3.5">
+        <div class="flex justify-between items-center text-xs pb-1 border-b border-slate-100">
+          <span id="studentAuthModeTitle" class="font-bold text-slate-700">Student Sign In</span>
+          <button id="studentAuthToggleBtn" onclick="toggleStudentAuthMode()" class="text-orange-600 font-bold hover:underline">
+            New Student? Register
+          </button>
+        </div>
+
+        <div id="studentNameGroup" class="hidden">
+          <label class="block text-xs font-bold text-slate-700 mb-1">Full Name</label>
+          <div class="relative">
+            <i class="fa-regular fa-user absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input type="text" id="inputStudentName" placeholder="e.g. Aryan Sharma" class="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 outline-none">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Student Roll / ID</label>
+          <div class="relative">
+            <i class="fa-solid fa-id-card absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input type="text" id="inputStudentRoll" placeholder="e.g. CS2024-001" class="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 outline-none">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Secret PIN / Password</label>
+          <div class="relative">
+            <i class="fa-solid fa-lock absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input type="password" id="inputStudentPass" placeholder="••••••••" class="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 outline-none">
+          </div>
+        </div>
+
+        <button onclick="handleStudentAuthSubmit()" id="btnStudentSubmit" class="w-full py-2.5 sm:py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-bold rounded-xl text-xs shadow-lg shadow-orange-600/30 transition-all flex items-center justify-center space-x-2">
+          <i class="fa-solid fa-right-to-bracket"></i>
+          <span id="btnStudentSubmitLabel">Log In to Canteen</span>
+        </button>
+
+        <div class="pt-1 text-center">
+          <button onclick="fillDemoStudent()" class="text-[11px] text-slate-500 hover:text-orange-600 bg-slate-100 hover:bg-orange-50 px-3 py-1 rounded-full border border-slate-200 transition-colors">
+            ⚡ Prefill Demo Roll ID: <span class="font-bold">CS2024-001</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- STAFF AUTH FORM -->
+      <div id="staffAuthContainer" class="hidden space-y-3.5">
+        <div class="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+          <div class="font-bold flex items-center space-x-1.5 text-amber-800">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>Kitchen Portal Access</span>
+          </div>
+          <p class="text-[11px] text-amber-800/90 leading-tight">Staff ID: <code class="font-bold bg-amber-200/70 px-1 rounded">staff101</code> | Password: <code class="font-bold bg-amber-200/70 px-1 rounded">set in Firebase Console</code></p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Staff ID</label>
+          <div class="relative">
+            <i class="fa-solid fa-user-shield absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input type="text" id="inputStaffId" value="staff101" placeholder="staff101" class="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 outline-none">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Staff Access Key</label>
+          <div class="relative">
+            <i class="fa-solid fa-key absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+            <input type="password" id="inputStaffPass" value="" placeholder="Firebase staff password" class="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-orange-500 outline-none">
+          </div>
+        </div>
+
+        <button onclick="handleStaffLogin()" class="w-full py-2.5 sm:py-3 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-xs shadow-lg transition-all flex items-center justify-center space-x-2">
+          <i class="fa-solid fa-kitchen-set"></i>
+          <span>Access Kitchen Console</span>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       MAIN APP HEADER & ANALOG RUSH METER
+       ========================================================================= -->
+  <header class="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-sm">
+    <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 flex flex-wrap items-center justify-between gap-2">
+      
+      <!-- Brand & Team Name -->
+      <div class="flex items-center space-x-2.5">
+        <div class="w-9 h-9 sm:w-11 sm:h-11 rounded-xl sm:rounded-2xl bg-gradient-to-tr from-orange-600 to-amber-500 text-white flex items-center justify-center font-black text-lg sm:text-xl shadow-md shadow-orange-500/25 shrink-0">
+          <i class="fa-solid fa-bowl-food"></i>
+        </div>
+        <div>
+          <div class="flex items-center space-x-1.5 sm:space-x-2">
+            <span class="font-display font-black text-base sm:text-xl text-slate-900 tracking-tight">Cyberhunt Canteen</span>
+            <span class="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider bg-orange-100 text-orange-800 px-1.5 sm:px-2 py-0.5 rounded-full border border-orange-200">
+              RushTracker
+            </span>
+          </div>
+          <p class="text-[10px] sm:text-xs text-slate-500 hidden xs:block">Fresh Canteen Kitchen & Live Load Balancer</p>
+        </div>
+      </div>
+
+      <!-- CENTER: REALISTIC ANALOG RUSH METER -->
+      <div class="flex items-center bg-slate-50 border border-slate-200 rounded-xl sm:rounded-2xl px-2 sm:px-3 py-1 shadow-sm space-x-2 order-3 sm:order-2 w-full sm:w-auto justify-between sm:justify-start">
+        <div class="relative w-20 h-10 sm:w-24 sm:h-12 flex items-center justify-center shrink-0">
+          <svg viewBox="0 0 200 110" class="w-full h-full overflow-visible">
+            <!-- Background Arc: Green (0-4), Amber (5-9), Red (10+) -->
+            <path d="M 20 100 A 80 80 0 0 1 70 34" fill="none" stroke="#10b981" stroke-width="14" stroke-linecap="round" />
+            <path d="M 77 29 A 80 80 0 0 1 123 29" fill="none" stroke="#f59e0b" stroke-width="14" />
+            <path d="M 130 34 A 80 80 0 0 1 180 100" fill="none" stroke="#ef4444" stroke-width="14" stroke-linecap="round" />
+            
+            <!-- Needle Pivot -->
+            <circle cx="100" cy="92" r="10" fill="#0f172a" />
+            <circle cx="100" cy="92" r="4" fill="#ffffff" />
+            
+            <!-- Animated Needle -->
+            <polygon id="rushGaugeNeedle" class="gauge-needle" points="98,92 102,92 100,20" fill="#0f172a" style="transform: rotate(-75deg);" />
+          </svg>
+        </div>
+
+        <div class="text-left pr-1">
+          <div class="flex items-center space-x-1.5">
+            <span id="rushLevelBadge" class="text-[10px] sm:text-xs font-black uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 whitespace-nowrap">
+              Low Rush
+            </span>
+            <span id="rushActiveCount" class="text-[11px] sm:text-xs font-black text-slate-800 whitespace-nowrap">0 Active</span>
+          </div>
+          <p id="rushWaitEstimate" class="text-[9px] sm:text-[10px] text-slate-500 font-medium">Wait: ~3-5 mins</p>
+        </div>
+      </div>
+
+      <!-- Persistent Firebase notification center -->
+      <button id="notificationBell" onclick="toggleNotificationPanel()" title="Notifications" class="relative order-2 sm:order-3 p-2 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 hover:text-orange-600 hover:bg-orange-50 transition-colors">
+        <i class="fa-regular fa-bell"></i>
+        <span id="notificationUnreadBadge" class="hidden absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-black items-center justify-center">0</span>
+      </button>
+
+      <!-- RIGHT: Logged in User Bar & Quick Switch/Logout -->
+      <div class="flex items-center space-x-2 order-2 sm:order-3">
+        <div class="text-right hidden sm:block">
+          <span id="headerUserName" class="text-xs font-bold text-slate-800 leading-tight block">Student</span>
+          <span id="headerUserRole" class="text-[10px] font-semibold text-orange-600 capitalize">Role</span>
+        </div>
+        <div id="headerUserAvatar" class="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-orange-100 text-orange-700 flex items-center justify-center font-bold text-xs border border-orange-200 shadow-sm shrink-0">
+          <i class="fa-regular fa-user"></i>
+        </div>
+        <button onclick="handleLogout()" title="Logout" class="p-1.5 sm:p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all">
+          <i class="fa-solid fa-arrow-right-from-bracket text-sm sm:text-base"></i>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Persistent notification drawer. Messages are stored in Firestore. -->
+  <section id="notificationPanel" class="hidden fixed top-20 right-3 sm:right-6 z-[60] w-[calc(100vw-1.5rem)] sm:w-96 max-h-[70vh] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+    <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+      <div>
+        <h3 class="font-display font-extrabold text-slate-900">Notifications</h3>
+        <p class="text-[11px] text-slate-500">Order updates saved to your account</p>
+      </div>
+      <button onclick="markAllNotificationsRead()" class="text-[11px] font-bold text-orange-600 hover:underline">Mark all read</button>
+    </div>
+    <div id="notificationsList" class="max-h-[calc(70vh-4.5rem)] overflow-y-auto p-3 space-y-2">
+      <p class="py-8 text-center text-xs text-slate-400">Sign in to see notifications.</p>
+    </div>
+  </section>
+
+  <!-- =========================================================================
+       MAIN CONTENT CONTAINER
+       ========================================================================= -->
+  <main class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 w-full py-4 sm:py-6 flex-1">
+    
+    <!-- =======================================================================
+         STUDENT VIEW
+         ======================================================================= -->
+    <div id="viewStudent" class="space-y-4 sm:space-y-6">
+
+      <!-- Student's Personal Stats Header Bar -->
+      <div class="grid grid-cols-3 gap-2 sm:gap-4">
+        <div class="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p class="text-[9px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">Total Orders</p>
+            <h3 id="studentMetricTotal" class="text-lg sm:text-2xl font-display font-black text-slate-900 mt-0.5 sm:mt-1">0</h3>
+          </div>
+          <div class="w-8 h-8 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center text-sm sm:text-lg shrink-0">
+            <i class="fa-solid fa-receipt"></i>
+          </div>
+        </div>
+
+        <div class="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p class="text-[9px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">Collected</p>
+            <h3 id="studentMetricCompleted" class="text-lg sm:text-2xl font-display font-black text-emerald-600 mt-0.5 sm:mt-1">0</h3>
+          </div>
+          <div class="w-8 h-8 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-sm sm:text-lg shrink-0">
+            <i class="fa-solid fa-circle-check"></i>
+          </div>
+        </div>
+
+        <div class="bg-white p-3 sm:p-4 rounded-xl sm:rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p class="text-[9px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">Active In Kitchen</p>
+            <h3 id="studentMetricActive" class="text-lg sm:text-2xl font-display font-black text-amber-600 mt-0.5 sm:mt-1">0</h3>
+          </div>
+          <div class="w-8 h-8 sm:w-11 sm:h-11 rounded-lg sm:rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-sm sm:text-lg shrink-0">
+            <i class="fa-solid fa-kitchen-set animate-pulse"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Active Order Fast Alert Banner -->
+      <div id="studentActiveLiveBanner" class="hidden bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 rounded-2xl p-3 sm:p-4 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
+        <div class="flex items-center space-x-3">
+          <div class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-lg sm:text-xl shrink-0">
+            <i class="fa-solid fa-bell animate-bounce"></i>
+          </div>
+          <div>
+            <div class="flex items-center space-x-2">
+              <span class="text-[10px] uppercase font-black tracking-widest bg-white/20 px-2 py-0.5 rounded-full">Active Order Placed</span>
+              <span id="liveBannerToken" class="font-mono font-black text-xs sm:text-sm">#ORD-101</span>
+            </div>
+            <p id="liveBannerStatusText" class="text-[11px] sm:text-xs text-orange-100 font-medium mt-0.5">Your food is currently being prepared in the canteen kitchen!</p>
+          </div>
+        </div>
+        <button onclick="setStudentSubTab('myorders')" class="px-3 py-1.5 sm:px-4 sm:py-2 bg-white text-orange-600 hover:bg-orange-50 font-extrabold text-xs rounded-xl shadow transition-colors flex items-center justify-center space-x-1.5 whitespace-nowrap self-start sm:self-auto">
+          <span>View Live Token Tracker</span>
+          <i class="fa-solid fa-arrow-right text-[10px]"></i>
+        </button>
+      </div>
+
+      <!-- Student Navigation Sub-Tabs -->
+      <div class="flex border-b border-slate-200 space-x-4 sm:space-x-6 pb-1">
+        <button id="btnSubTabOrder" onclick="setStudentSubTab('order')" class="pb-2 border-b-2 border-orange-600 font-bold text-xs sm:text-sm text-orange-600 flex items-center space-x-1.5 sm:space-x-2">
+          <i class="fa-solid fa-burger"></i>
+          <span>Order From Canteen</span>
+        </button>
+        <button id="btnSubTabMyOrders" onclick="setStudentSubTab('myorders')" class="pb-2 border-b-2 border-transparent font-medium text-xs sm:text-sm text-slate-500 hover:text-slate-900 flex items-center space-x-1.5 sm:space-x-2">
+          <i class="fa-solid fa-clock-rotate-left"></i>
+          <span>My Order History</span>
+          <span id="studentActiveBadgeChip" class="hidden bg-orange-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">0</span>
+        </button>
+      </div>
+
+      <!-- PANEL 1: Canteen Menu & Tray -->
+      <div id="panelStudentOrder" class="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-8">
+        
+        <!-- Menu Items Column -->
+        <div class="lg:col-span-8 space-y-4">
+          <!-- Filters and Search -->
+          <div class="bg-white p-3 sm:p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-2.5">
+            <div class="flex items-center space-x-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0" id="catPillsContainer">
+              <button onclick="setCategoryFilter('all')" class="cat-pill active px-3 py-1.5 rounded-xl text-xs font-bold bg-orange-600 text-white shadow-sm whitespace-nowrap">All Dishes</button>
+              <button onclick="setCategoryFilter('Snacks')" class="cat-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 whitespace-nowrap">Snacks</button>
+              <button onclick="setCategoryFilter('Meals')" class="cat-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 whitespace-nowrap">Meals</button>
+              <button onclick="setCategoryFilter('Beverages')" class="cat-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 whitespace-nowrap">Beverages</button>
+              <button onclick="setCategoryFilter('Dessert')" class="cat-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 whitespace-nowrap">Desserts</button>
+            </div>
+
+            <!-- Search input -->
+            <div class="relative w-full sm:w-56">
+              <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
+              <input type="text" id="menuSearchInput" oninput="renderStudentCatalog()" placeholder="Search samosa, chai, dosa..." class="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500">
+            </div>
+          </div>
+
+          <!-- Food Grid with Images -->
+          <div id="foodCatalogGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 sm:gap-5">
+            <!-- Dynamically populated food cards -->
+          </div>
+        </div>
+
+        <!-- Student Order Cart Tray (Right Column) -->
+        <div class="lg:col-span-4">
+          <div class="bg-white rounded-3xl border border-slate-200 shadow-lg p-4 sm:p-5 lg:sticky lg:top-28">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div class="flex items-center space-x-2">
+                <div class="w-8 h-8 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center text-sm font-bold">
+                  <i class="fa-solid fa-bag-shopping"></i>
+                </div>
+                <h3 class="font-display font-extrabold text-slate-900 text-base">Your Tray</h3>
+              </div>
+              <span id="trayItemCountBadge" class="text-xs bg-orange-50 text-orange-700 font-bold px-2.5 py-0.5 rounded-full border border-orange-200">0 items</span>
+            </div>
+
+            <!-- Cart Items List -->
+            <div id="trayItemsContainer" class="my-3 divide-y divide-slate-100 max-h-60 sm:max-h-72 overflow-y-auto pr-1">
+              <div class="py-8 text-center text-slate-400 text-xs">
+                <i class="fa-solid fa-plate-wheat text-3xl mb-2 text-slate-300"></i>
+                <p class="font-semibold">Your tray is empty</p>
+                <p class="text-[11px] text-slate-400 mt-0.5">Select delicious snacks or meals from the canteen menu.</p>
+              </div>
+            </div>
+
+            <!-- Total Breakdown -->
+            <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 text-xs space-y-2">
+              <div class="flex justify-between text-slate-600">
+                <span>Subtotal</span>
+                <span id="traySubtotal" class="font-bold text-slate-800">₹0</span>
+              </div>
+              <div class="flex justify-between text-slate-600">
+                <span>Student Campus Subsidy</span>
+                <span class="text-emerald-600 font-bold">Free</span>
+              </div>
+              <div class="flex justify-between text-slate-900 font-bold text-sm pt-2 border-t border-slate-200">
+                <span>Grand Total</span>
+                <span id="trayGrandTotal" class="text-orange-600 font-extrabold text-base">₹0</span>
+              </div>
+            </div>
+
+            <!-- Proceed to Payment Button -->
+            <button onclick="openPaymentModal()" id="btnSubmitOrder" class="mt-4 w-full py-3 px-4 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-extrabold rounded-2xl text-xs shadow-md shadow-orange-600/30 transition-all flex items-center justify-center space-x-2 disabled:opacity-40 disabled:cursor-not-allowed">
+              <i class="fa-solid fa-credit-card"></i>
+              <span>Select Payment & Place Order</span>
+            </button>
+
+            <p class="text-[10px] text-slate-400 text-center mt-2">
+              <i class="fa-solid fa-shield-check text-emerald-500 mr-1"></i>UPI is a demo flow until a verified payment gateway is connected, or pay cash at pickup.
+            </p>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- PANEL 2: Student's Own Personal Orders & Live Tracker -->
+      <div id="panelStudentMyOrders" class="hidden space-y-4">
+        <div class="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h3 class="font-display font-extrabold text-slate-900 text-base">My Order History & Live Status</h3>
+            <p class="text-xs text-slate-500">Track tokens for food ordered specifically with your student account.</p>
+          </div>
+          <span class="text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-full flex items-center space-x-1.5 w-fit">
+            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+            <span>Real-time Sync Active</span>
+          </span>
+        </div>
+
+        <div id="studentPersonalOrdersGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+          <!-- Dynamically populated student orders -->
+        </div>
+      </div>
+
+    </div>
+
+    <!-- =======================================================================
+         STAFF VIEW (Kitchen Command Center)
+         ======================================================================= -->
+    <div id="viewStaff" class="hidden space-y-5">
+
+      <!-- Staff Header Quick Bar -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+        <!-- Metric 1: Kitchen Active Load -->
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Kitchen Active Load</p>
+            <h3 id="staffTotalActiveCount" class="text-2xl font-display font-black text-slate-900 mt-1">0 Orders</h3>
+            <span id="staffRushBadge" class="inline-block mt-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+              Low Rush
+            </span>
+          </div>
+          <div class="w-12 h-12 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center text-xl shrink-0">
+            <i class="fa-solid fa-fire-burner"></i>
+          </div>
+        </div>
+
+        <!-- Metric 2: Today's Orders & Revenue -->
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <p class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Orders & Revenue</p>
+            <h3 id="staffTotalServedCount" class="text-2xl font-display font-black text-slate-900 mt-1">0 Orders</h3>
+            <p id="staffRevenueStat" class="text-[11px] text-emerald-600 font-bold mt-1">₹0 Total Sales</p>
+          </div>
+          <div class="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl shrink-0">
+            <i class="fa-solid fa-cash-register"></i>
+          </div>
+        </div>
+
+        <!-- Metric 3: Judge Demo / Rush Simulator Panel -->
+        <div class="bg-gradient-to-br from-slate-900 to-indigo-950 text-white p-4 rounded-2xl shadow-md flex flex-col justify-between sm:col-span-2 lg:col-span-1">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center space-x-1">
+                <i class="fa-solid fa-flask-vial"></i>
+                <span>Judge Demo Testing</span>
+              </span>
+              <span class="text-[10px] bg-indigo-800 text-indigo-200 px-2 py-0.5 rounded font-mono font-bold">Cyberhunt</span>
+            </div>
+            <p class="text-[11px] text-slate-300 mt-1">Simulate order bursts to test Low (0-4), Medium (5-9), and High (10+) rush thresholds.</p>
+          </div>
+
+          <div class="flex space-x-2 mt-3">
+            <button onclick="injectJudgeSurge(5)" class="flex-1 py-1.5 px-2 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-extrabold text-[11px] rounded-xl transition-all shadow">
+              +5 Surge (Med)
+            </button>
+            <button onclick="injectJudgeSurge(10)" class="flex-1 py-1.5 px-2 bg-rose-500 hover:bg-rose-600 active:bg-rose-700 text-white font-extrabold text-[11px] rounded-xl transition-all shadow">
+              +10 Surge (High)
+            </button>
+            <button onclick="resetAllDemoData()" title="Reset to initial data" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl">
+              <i class="fa-solid fa-rotate-left"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Staff Section Selector: Order Pipeline vs Stock Availability -->
+      <div class="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="flex border-b border-slate-200 bg-slate-50/70 px-4 sm:px-5 pt-3 space-x-4 sm:space-x-6 overflow-x-auto">
+          <button id="staffNavOrdersBtn" onclick="switchStaffSection('orders')" class="pb-3 border-b-2 border-orange-600 font-bold text-xs sm:text-sm text-orange-600 flex items-center space-x-2 whitespace-nowrap">
+            <i class="fa-solid fa-list-check"></i>
+            <span>Kitchen Order Pipeline</span>
+          </button>
+          <button id="staffNavStockBtn" onclick="switchStaffSection('stock')" class="pb-3 border-b-2 border-transparent font-medium text-xs sm:text-sm text-slate-500 hover:text-slate-900 flex items-center space-x-2 whitespace-nowrap">
+            <i class="fa-solid fa-cubes-stacked"></i>
+            <span>Menu & Stock Availability</span>
+          </button>
+        </div>
+
+        <!-- Section 1: Staff Orders Queue -->
+        <div id="staffSectionOrders" class="p-3 sm:p-5 space-y-4">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <!-- Filter by Status -->
+            <div class="flex items-center space-x-1.5 overflow-x-auto pb-1 sm:pb-0">
+              <span class="text-xs font-bold text-slate-500">Filter:</span>
+              <button onclick="filterStaffOrders('ALL')" class="staff-flt-btn active px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-900 text-white">All</button>
+              <button onclick="filterStaffOrders('New')" class="staff-flt-btn px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">New</button>
+              <button onclick="filterStaffOrders('Preparing')" class="staff-flt-btn px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">Preparing</button>
+              <button onclick="filterStaffOrders('Ready')" class="staff-flt-btn px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">Ready</button>
+              <button onclick="filterStaffOrders('Collected')" class="staff-flt-btn px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200">Collected</button>
+            </div>
+            
+            <p class="text-[11px] text-slate-400">
+              *Marking an order <strong class="text-slate-700">Collected</strong> instantly reduces active kitchen rush!
+            </p>
+          </div>
+
+          <!-- Staff Orders List -->
+          <div id="staffOrdersList" class="space-y-3">
+            <!-- Dynamically populated by JS -->
+          </div>
+        </div>
+
+        <!-- Section 2: Menu Stock & Availability -->
+        <div id="staffSectionStock" class="p-3 sm:p-5 space-y-4 hidden">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+            <div>
+              <h4 class="font-bold text-slate-900 text-sm">Real-time Canteen Stock Manager</h4>
+              <p class="text-xs text-slate-500">Items toggled "Out of Stock" are immediately locked from students ordering them.</p>
+            </div>
+            <button onclick="openNewDishModal()" class="px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-xl shadow flex items-center space-x-1.5 w-fit">
+              <i class="fa-solid fa-plus"></i>
+              <span>Add New Dish</span>
+            </button>
+          </div>
+
+          <div class="overflow-x-auto rounded-2xl border border-slate-200">
+            <table class="w-full text-left text-xs text-slate-600 min-w-[500px]">
+              <thead class="bg-slate-50 text-slate-700 uppercase font-bold text-[11px] border-b border-slate-200">
+                <tr>
+                  <th class="py-3 px-4">Dish</th>
+                  <th class="py-3 px-4">Category</th>
+                  <th class="py-3 px-4">Price</th>
+                  <th class="py-3 px-4">Stock Status</th>
+                  <th class="py-3 px-4 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody id="staffStockTableBody" class="divide-y divide-slate-100 font-medium">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- =========================================================================
+       PAYMENT MODAL (UPI QR & CASH ON COUNTER)
+       ========================================================================= -->
+  <div id="paymentModal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div class="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 my-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div class="flex items-center space-x-2">
+          <div class="w-8 h-8 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center font-bold text-sm">
+            <i class="fa-solid fa-wallet"></i>
+          </div>
+          <h4 class="font-display font-black text-slate-900 text-base">Select Payment Method</h4>
+        </div>
+        <button onclick="closePaymentModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <div class="my-4">
+        <!-- Order Bill Summary -->
+        <div class="bg-orange-50 border border-orange-200 rounded-2xl p-3 flex justify-between items-center mb-4">
+          <div>
+            <span class="text-[11px] text-orange-700 font-bold block uppercase">Payable Total Amount</span>
+            <span id="payModalAmount" class="text-2xl font-display font-black text-orange-900">₹0</span>
+          </div>
+          <span class="text-[11px] font-bold bg-white text-orange-800 px-2.5 py-1 rounded-full border border-orange-200">
+            Cyberhunt Canteen
+          </span>
+        </div>
+
+        <!-- Payment Mode Selectors -->
+        <div class="grid grid-cols-2 gap-2.5 mb-4">
+          <button id="btnPayUPI" onclick="selectPaymentMode('UPI')" class="p-3 border-2 border-orange-600 bg-orange-50/50 rounded-2xl text-left transition-all">
+            <div class="flex items-center justify-between">
+              <i class="fa-solid fa-qrcode text-orange-600 text-lg"></i>
+              <span class="text-[10px] font-black uppercase text-orange-700 bg-orange-100 px-1.5 py-0.5 rounded">Fast</span>
+            </div>
+            <p class="font-bold text-xs text-slate-900 mt-2">Pay via UPI QR</p>
+            <p class="text-[10px] text-slate-500">GPay, PhonePe, Paytm</p>
+          </button>
+
+          <button id="btnPayCash" onclick="selectPaymentMode('CASH')" class="p-3 border-2 border-slate-200 bg-white hover:border-slate-300 rounded-2xl text-left transition-all">
+            <div class="flex items-center justify-between">
+              <i class="fa-solid fa-hand-holding-dollar text-emerald-600 text-lg"></i>
+              <span class="text-[10px] font-black uppercase text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded">Counter</span>
+            </div>
+            <p class="font-bold text-xs text-slate-900 mt-2">Cash on Counter</p>
+            <p class="text-[10px] text-slate-500">Pay when collecting</p>
+          </button>
+        </div>
+
+        <!-- Mode 1: Dynamic UPI Section -->
+        <div id="sectionPayUPI" class="space-y-3 bg-slate-50 border border-slate-200 rounded-2xl p-3.5 text-center">
+          <p class="text-xs font-bold text-slate-800">Scan QR Code using any UPI App</p>
+          
+          <div class="w-44 h-44 mx-auto bg-white p-2 rounded-2xl border border-slate-200 shadow-inner flex items-center justify-center">
+            <img id="upiQrImage" src="" alt="UPI QR Code" class="w-full h-full object-contain rounded-xl">
+          </div>
+
+          <div class="flex items-center justify-center space-x-3 text-xs">
+            <span class="text-slate-500 font-mono text-[11px]">canteen@cyberhunt.upi</span>
+            <button onclick="copyUpiId()" class="text-orange-600 font-bold hover:underline text-[11px]">Copy UPI</button>
+          </div>
+
+          <!-- Direct UPI Intent Link for Mobile Users -->
+          <a id="btnUpiIntentLink" href="#" class="block w-full py-2 bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-bold rounded-xl text-xs shadow transition-all">
+            <i class="fa-solid fa-mobile-screen-button mr-1"></i> Open in PhonePe / GPay / Paytm
+          </a>
+        </div>
+
+        <!-- Mode 2: Cash Instruction Section -->
+        <div id="sectionPayCash" class="hidden space-y-2 bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 text-xs text-emerald-900">
+          <div class="flex items-center space-x-2 font-bold text-emerald-800">
+            <i class="fa-solid fa-coins text-base"></i>
+            <span>Cash Payment Mode Selected</span>
+          </div>
+          <p class="text-[11px] leading-relaxed text-emerald-800/90">
+            Your token will be marked <span class="font-bold text-amber-700">"Payment: Pending (Cash)"</span>. Kitchen staff will collect cash from you at the counter before handing over your food.
+          </p>
+        </div>
+      </div>
+
+      <!-- Final Submit Action -->
+      <button onclick="confirmOrderWithPayment()" id="btnConfirmPaymentAndOrder" class="w-full py-3 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 text-white font-extrabold rounded-2xl text-xs shadow-lg shadow-orange-600/30 transition-all flex items-center justify-center space-x-2">
+        <i class="fa-solid fa-circle-check"></i>
+        <span id="btnConfirmPaymentLabel">Place Order (UPI payment pending)</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       ADD NEW DISH MODAL (Staff)
+       ========================================================================= -->
+  <div id="newDishModal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div class="bg-white rounded-3xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 my-auto">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+        <h4 class="font-display font-extrabold text-base text-slate-900">Add New Canteen Item</h4>
+        <button onclick="closeNewDishModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <div class="my-4 space-y-3 text-xs">
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">Dish Name</label>
+          <input type="text" id="newDishName" placeholder="e.g. Masala Pav" class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500">
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">Price (₹)</label>
+            <input type="number" id="newDishPrice" placeholder="50" class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500">
+          </div>
+          <div>
+            <label class="block font-bold text-slate-700 mb-1">Category</label>
+            <select id="newDishCat" class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500">
+              <option value="Snacks">Snacks</option>
+              <option value="Meals">Meals</option>
+              <option value="Beverages">Beverages</option>
+              <option value="Dessert">Dessert</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">Image URL (Unsplash/Direct link)</label>
+          <input type="text" id="newDishImage" placeholder="https://..." class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500">
+        </div>
+
+        <div>
+          <label class="block font-bold text-slate-700 mb-1">Description</label>
+          <textarea id="newDishDesc" rows="2" placeholder="Brief ingredients or preparation details..." class="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-orange-500"></textarea>
+        </div>
+      </div>
+
+      <div class="flex space-x-2">
+        <button onclick="closeNewDishModal()" class="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs">Cancel</button>
+        <button onclick="saveNewDish()" class="flex-1 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs shadow">Add Dish</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ORDER SUCCESS POPUP MODAL -->
+  <div id="orderSuccessModal" class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+    <div class="bg-white rounded-3xl max-w-sm w-full p-5 sm:p-6 shadow-2xl border border-slate-200 text-center relative overflow-hidden my-auto animate-bounce-short">
+      <div class="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-emerald-100 text-emerald-600 mx-auto flex items-center justify-center text-xl sm:text-2xl mb-3 border border-emerald-200 shadow-inner">
+        <i class="fa-solid fa-check-double"></i>
+      </div>
+      <span class="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 px-3 py-0.5 rounded-full border border-emerald-200">
+        Order Sent to Kitchen
+      </span>
+      <h3 class="font-display font-black text-2xl text-slate-900 mt-2">Token #<span id="popupTokenNum">105</span></h3>
+      <p class="text-xs text-slate-500 mt-0.5">Show this token at the canteen pick-up counter.</p>
+      
+      <div class="my-3 p-3 bg-slate-50 border border-slate-100 rounded-2xl text-left text-xs space-y-1.5">
+        <div class="flex justify-between text-slate-500">
+          <span>Status:</span>
+          <span class="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-200">New (Queued)</span>
+        </div>
+        <div class="flex justify-between text-slate-500">
+          <span>Payment:</span>
+          <span id="popupPaymentMode" class="font-bold text-emerald-700">UPI Paid</span>
+        </div>
+        <div class="flex justify-between text-slate-500">
+          <span>Total Amount:</span>
+          <span id="popupTotalAmount" class="font-bold text-slate-900">₹0</span>
+        </div>
+      </div>
+
+      <div class="space-y-2">
+        <button onclick="closeSuccessModalAndShowOrders()" class="w-full py-2.5 sm:py-3 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs shadow-md shadow-orange-600/30 transition-all flex items-center justify-center space-x-2">
+          <i class="fa-solid fa-clock-rotate-left"></i>
+          <span>Track in "My Orders"</span>
+        </button>
+        <button onclick="closeSuccessModal()" class="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition-colors">
+          Order More Food
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATION CONTAINER -->
+  <div id="toastBox" class="fixed bottom-4 sm:bottom-6 right-4 sm:right-6 z-50 transform translate-y-28 opacity-0 transition-all duration-300 pointer-events-none max-w-[90vw] sm:max-w-sm">
+    <div class="bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center space-x-3">
+      <div id="toastIcon" class="text-orange-400 text-lg shrink-0">
+        <i class="fa-solid fa-circle-info"></i>
+      </div>
+      <div>
+        <h5 id="toastTitle" class="text-xs font-bold text-white">Notice</h5>
+        <p id="toastMessage" class="text-xs text-slate-300">Message details</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       JAVASCRIPT APPLICATION ENGINE
+       ========================================================================= -->
+  <script>
+    const STORAGE_KEY_MENU = 'cyberhunt_menu_v2';
+    const STORAGE_KEY_ORDERS = 'cyberhunt_orders_v2';
+    const STORAGE_KEY_USERS = 'cyberhunt_users_v2';
+    const STORAGE_KEY_AUTH = 'cyberhunt_current_auth_v2';
+
+    const INITIAL_MENU = [
+      {
+        id: 'snack-1',
+        name: 'Crispy Samosa (2 pcs)',
+        category: 'Snacks',
+        price: 30,
+        available: true,
+        desc: 'Golden crust spiced potato pastries served with tamarind & mint chutney.',
+        image: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'snack-2',
+        name: 'Cheese Veg Burger',
+        category: 'Snacks',
+        price: 75,
+        available: true,
+        desc: 'Crispy herb potato patty topped with melted cheese, lettuce, and mayo.',
+        image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'snack-3',
+        name: 'Paneer Tikka Roll',
+        category: 'Snacks',
+        price: 90,
+        available: true,
+        desc: 'Chargrilled marinated cottage cheese wrapped in fresh flaky paratha.',
+        image: 'https://images.unsplash.com/photo-1626777552726-4a6b54c97e46?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'snack-4',
+        name: 'Cheese Maggi (Double)',
+        category: 'Snacks',
+        price: 55,
+        available: true,
+        desc: 'College canteen special spicy noodles topped with melted shredded cheese.',
+        image: 'https://images.unsplash.com/photo-1612927601601-6638404737ce?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'snack-5',
+        name: 'Crispy Peri-Peri Fries',
+        category: 'Snacks',
+        price: 60,
+        available: false,
+        desc: 'Deep fried salted potato fingers tossed in spicy African peri peri seasoning.',
+        image: 'https://images.unsplash.com/photo-1576107232684-1279f3908594?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'meal-1',
+        name: 'Butter Masala Dosa',
+        category: 'Meals',
+        price: 85,
+        available: true,
+        desc: 'Paper-thin fermented crepe with aromatic potato bhaji and coconut chutney.',
+        image: 'https://images.unsplash.com/photo-1668236543090-82eba5ee5976?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'meal-2',
+        name: 'Schezwan Fried Rice',
+        category: 'Meals',
+        price: 110,
+        available: true,
+        desc: 'Wok tossed basmati rice with crunchy carrots, cabbage, and fiery schezwan sauce.',
+        image: 'https://images.unsplash.com/photo-1603133872878-684f208fb84b?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'bev-1',
+        name: 'Kulhad Masala Chai',
+        category: 'Beverages',
+        price: 20,
+        available: true,
+        desc: 'Simmered ginger and cardamom milk tea served in traditional clay cups.',
+        image: 'https://images.unsplash.com/photo-1576092768241-dec231879fc3?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'bev-2',
+        name: 'Chilled Cold Coffee',
+        category: 'Beverages',
+        price: 50,
+        available: true,
+        desc: 'Blended espresso with thick chilled milk and Hershey chocolate drizzle.',
+        image: 'https://images.unsplash.com/photo-1517701604599-bb29b565090c?auto=format&fit=crop&w=600&q=80'
+      },
+      {
+        id: 'des-1',
+        name: 'Hot Gulab Jamun (2 pcs)',
+        category: 'Dessert',
+        price: 40,
+        available: true,
+        desc: 'Soft melt-in-mouth milk solids soaked in cardamom rose syrup.',
+        image: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?auto=format&fit=crop&w=600&q=80'
+      }
+    ];
+
+    const INITIAL_USERS = [];
+
+    const INITIAL_ORDERS = [
+      {
+        id: 'ORD-101',
+        token: 101,
+        studentRoll: 'CS2024-001',
+        studentName: 'Aarav Mehta',
+        items: [{ id: 'snack-1', name: 'Crispy Samosa (2 pcs)', price: 30, qty: 2 }, { id: 'bev-1', name: 'Kulhad Masala Chai', price: 20, qty: 1 }],
+        totalPrice: 80,
+        paymentMode: 'UPI',
+        paymentStatus: 'Paid',
+        status: 'Preparing',
+        createdAt: '10:15 AM'
+      },
+      {
+        id: 'ORD-102',
+        token: 102,
+        studentRoll: 'CS2024-001',
+        studentName: 'Aarav Mehta',
+        items: [{ id: 'meal-1', name: 'Butter Masala Dosa', price: 85, qty: 1 }],
+        totalPrice: 85,
+        paymentMode: 'CASH',
+        paymentStatus: 'Paid',
+        status: 'Collected',
+        createdAt: '09:30 AM'
+      },
+      {
+        id: 'ORD-103',
+        token: 103,
+        studentRoll: 'ME2024-045',
+        studentName: 'Rohan Verma',
+        items: [{ id: 'snack-4', name: 'Cheese Maggi (Double)', price: 55, qty: 1 }],
+        totalPrice: 55,
+        paymentMode: 'CASH',
+        paymentStatus: 'Pending',
+        status: 'New',
+        createdAt: '10:32 AM'
+      }
+    ];
+
+    /* APP RUNTIME STATE */
+    let currentUser = null;
+    let menuItems = [];
+    let orders = [];
+    let studentUsers = [];
+    let orderCounter = 104;
+    let studentCart = {};
+    let activeCategory = 'all';
+    let currentStaffFilter = 'ALL';
+    let isStudentSignUp = false;
+    let selectedPayMode = 'UPI';
+
+    function initAppState() {
+      try {
+        const savedMenu = localStorage.getItem(STORAGE_KEY_MENU);
+        menuItems = savedMenu ? JSON.parse(savedMenu) : [...INITIAL_MENU];
+
+        const savedOrders = localStorage.getItem(STORAGE_KEY_ORDERS);
+        orders = savedOrders ? JSON.parse(savedOrders) : [...INITIAL_ORDERS];
+
+        const savedUsers = localStorage.getItem(STORAGE_KEY_USERS);
+        studentUsers = savedUsers ? JSON.parse(savedUsers) : [...INITIAL_USERS];
+
+        const savedAuth = localStorage.getItem(STORAGE_KEY_AUTH);
+        if (savedAuth) {
+          currentUser = JSON.parse(savedAuth);
+        }
+      } catch (e) {
+        menuItems = [...INITIAL_MENU];
+        orders = [...INITIAL_ORDERS];
+        studentUsers = [...INITIAL_USERS];
+      }
+    }
+
+    function saveStorage() {
+      try {
+        localStorage.setItem(STORAGE_KEY_MENU, JSON.stringify(menuItems));
+        localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(orders));
+        localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(studentUsers));
+        if (currentUser) {
+          localStorage.setItem(STORAGE_KEY_AUTH, JSON.stringify(currentUser));
+        } else {
+          localStorage.removeItem(STORAGE_KEY_AUTH);
+        }
+      } catch (e) {
+        console.warn("Storage save error", e);
+      }
+    }
+
+    /* AUTHENTICATION CONTROLLER */
+    function switchAuthRole(role) {
+      const studentTab = document.getElementById('authTabStudent');
+      const staffTab = document.getElementById('authTabStaff');
+      const studentContainer = document.getElementById('studentAuthContainer');
+      const staffContainer = document.getElementById('staffAuthContainer');
+
+      if (role === 'student') {
+        studentTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition-all bg-white text-orange-600 shadow-sm flex items-center justify-center space-x-1.5";
+        staffTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition-all text-slate-500 hover:text-slate-800 flex items-center justify-center space-x-1.5";
+        studentContainer.classList.remove('hidden');
+        staffContainer.classList.add('hidden');
+      } else {
+        staffTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition-all bg-white text-orange-600 shadow-sm flex items-center justify-center space-x-1.5";
+        studentTab.className = "flex-1 py-2 rounded-lg text-xs font-bold transition-all text-slate-500 hover:text-slate-800 flex items-center justify-center space-x-1.5";
+        staffContainer.classList.remove('hidden');
+        studentContainer.classList.add('hidden');
+      }
+    }
+
+    function toggleStudentAuthMode() {
+      isStudentSignUp = !isStudentSignUp;
+      const title = document.getElementById('studentAuthModeTitle');
+      const toggleBtn = document.getElementById('studentAuthToggleBtn');
+      const nameGroup = document.getElementById('studentNameGroup');
+      const submitLabel = document.getElementById('btnStudentSubmitLabel');
+
+      if (isStudentSignUp) {
+        title.textContent = "Create New Student Account";
+        toggleBtn.textContent = "Already have account? Sign In";
+        nameGroup.classList.remove('hidden');
+        submitLabel.textContent = "Create Account & Enter Canteen";
+      } else {
+        title.textContent = "Student Sign In";
+        toggleBtn.textContent = "New Student? Register";
+        nameGroup.classList.add('hidden');
+        submitLabel.textContent = "Log In to Canteen";
+      }
+    }
+
+    function fillDemoStudent() {
+      document.getElementById('inputStudentRoll').value = 'CS2024-001';
+      document.getElementById('inputStudentPass').value = '123';
+      handleStudentAuthSubmit();
+    }
+
+    function handleStudentAuthSubmit() {
+      const roll = (document.getElementById('inputStudentRoll').value || '').trim();
+      const pass = (document.getElementById('inputStudentPass').value || '').trim();
+
+      if (!roll || !pass) {
+        showToast("Missing Fields", "Please enter your Roll Number and Password.", "warning");
+        return;
+      }
+
+      if (isStudentSignUp) {
+        const name = (document.getElementById('inputStudentName').value || '').trim();
+        if (!name) {
+          showToast("Name Required", "Please enter your full name to create an account.", "warning");
+          return;
+        }
+
+        if (studentUsers.some(u => u.roll.toLowerCase() === roll.toLowerCase())) {
+          showToast("Account Exists", "An account with this Roll Number already exists. Please log in.", "error");
+          return;
+        }
+
+        const newUser = { roll, name, password: pass };
+        studentUsers.push(newUser);
+        currentUser = { role: 'student', roll: newUser.roll, name: newUser.name };
+        saveStorage();
+        showToast("Account Created", `Welcome, ${name}! Your account is securely stored.`, "success");
+      } else {
+        const existing = studentUsers.find(u => u.roll.toLowerCase() === roll.toLowerCase());
+        if (!existing || existing.password !== pass) {
+          showToast("Invalid Credentials", "Incorrect Roll Number or Password.", "error");
+          return;
+        }
+        currentUser = { role: 'student', roll: existing.roll, name: existing.name };
+        saveStorage();
+        showToast("Login Successful", `Welcome back, ${existing.name}!`, "success");
+      }
+
+      executeLoginTransition();
+    }
+
+    function handleStaffLogin() {
+      const id = (document.getElementById('inputStaffId').value || '').trim();
+      const pass = (document.getElementById('inputStaffPass').value || '').trim();
+
+      if (id === 'staff101' && pass === 'admin') {
+        currentUser = { role: 'staff', roll: 'staff101', name: 'Master Chef (Staff)' };
+        saveStorage();
+        showToast("Kitchen Authorized", "Welcome to Canteen Kitchen Command Center.", "success");
+        executeLoginTransition();
+      } else {
+        showToast("Access Denied", "Invalid Staff ID or Key. Use staff101 / admin.", "error");
+      }
+    }
+
+    function executeLoginTransition() {
+      const authScreen = document.getElementById('authScreen');
+      const authCard = document.getElementById('authCard');
+
+      authCard.classList.add('dismiss-auth');
+      setTimeout(() => {
+        authScreen.classList.add('hidden');
+        renderDashboardForCurrentRole();
+      }, 450);
+    }
+
+    function handleLogout() {
+      currentUser = null;
+      saveStorage();
+      
+      const authScreen = document.getElementById('authScreen');
+      const authCard = document.getElementById('authCard');
+
+      authCard.classList.remove('dismiss-auth');
+      authScreen.classList.remove('hidden');
+
+      document.getElementById('inputStudentRoll').value = '';
+      document.getElementById('inputStudentPass').value = '';
+      document.getElementById('inputStudentName').value = '';
+
+      showToast("Logged Out", "You have securely exited the canteen portal.", "info");
+    }
+
+    /* RUSH CALCULATION ENGINE */
+    function calculateRushState() {
+      const active = orders.filter(o => o.status !== 'Collected');
+      const count = active.length;
+      let level = 'Low';
+      let badgeClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+      let waitText = 'Wait: ~3-5 mins';
+      let needleDeg = -75;
+
+      if (count >= 10) {
+        level = 'High';
+        badgeClass = 'bg-rose-100 text-rose-800 border-rose-300 rush-high-glow';
+        waitText = 'Wait: ~20-30 mins (Peak)';
+        needleDeg = 75;
+      } else if (count >= 5) {
+        level = 'Medium';
+        badgeClass = 'bg-amber-100 text-amber-800 border-amber-200';
+        waitText = 'Wait: ~10-15 mins';
+        needleDeg = 0;
+      } else {
+        needleDeg = -75 + (count * 12);
+      }
+
+      return { count, level, badgeClass, waitText, needleDeg };
+    }
+
+    function updateRushMeterUI() {
+      const rush = calculateRushState();
+
+      const needle = document.getElementById('rushGaugeNeedle');
+      if (needle) needle.style.transform = `rotate(${rush.needleDeg}deg)`;
+
+      const badge = document.getElementById('rushLevelBadge');
+      if (badge) {
+        badge.className = `text-[10px] sm:text-xs font-black uppercase px-2 py-0.5 rounded-full border ${rush.badgeClass} whitespace-nowrap`;
+        badge.textContent = `${rush.level} Rush`;
+      }
+
+      const activeText = document.getElementById('rushActiveCount');
+      if (activeText) activeText.textContent = `${rush.count} Active`;
+
+      const waitText = document.getElementById('rushWaitEstimate');
+      if (waitText) waitText.textContent = rush.waitText;
+
+      const staffActiveCount = document.getElementById('staffTotalActiveCount');
+      if (staffActiveCount) staffActiveCount.textContent = `${rush.count} Orders`;
+
+      const staffRushBadge = document.getElementById('staffRushBadge');
+      if (staffRushBadge) {
+        staffRushBadge.className = `inline-block mt-1 text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${rush.badgeClass}`;
+        staffRushBadge.textContent = `${rush.level} Rush`;
+      }
+    }
+
+    /* STUDENT DASHBOARD LOGIC */
+    function renderStudentDashboard() {
+      document.getElementById('headerUserName').textContent = currentUser.name;
+      document.getElementById('headerUserRole').textContent = "Student";
+      document.getElementById('headerUserAvatar').innerHTML = `<i class="fa-solid fa-graduation-cap"></i>`;
+
+      renderStudentCatalog();
+      renderTrayUI();
+      renderStudentMetrics();
+      renderStudentPersonalOrders();
+      updateRushMeterUI();
+    }
+
+    function renderStudentMetrics() {
+      if (!currentUser || currentUser.role !== 'student') return;
+
+      const myOrders = orders.filter(o => o.studentRoll === currentUser.roll);
+      const completed = myOrders.filter(o => o.status === 'Collected').length;
+      const activeOrders = myOrders.filter(o => o.status !== 'Collected');
+      const activeCount = activeOrders.length;
+
+      document.getElementById('studentMetricTotal').textContent = myOrders.length;
+      document.getElementById('studentMetricCompleted').textContent = completed;
+      document.getElementById('studentMetricActive').textContent = activeCount;
+
+      const badgeChip = document.getElementById('studentActiveBadgeChip');
+      if (activeCount > 0) {
+        badgeChip.textContent = `${activeCount}`;
+        badgeChip.classList.remove('hidden');
+      } else {
+        badgeChip.classList.add('hidden');
+      }
+
+      const banner = document.getElementById('studentActiveLiveBanner');
+      if (activeCount > 0) {
+        const latestActive = activeOrders[0];
+        document.getElementById('liveBannerToken').textContent = `#${latestActive.token}`;
+        
+        let statusMsg = "Your order was sent to the kitchen.";
+        if (latestActive.status === 'Preparing') statusMsg = "Chef is currently cooking your fresh meal!";
+        if (latestActive.status === 'Ready') statusMsg = "HOT & READY! Please collect it from counter now!";
+        
+        document.getElementById('liveBannerStatusText').textContent = statusMsg;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+    }
+
+    function setStudentSubTab(tab) {
+      const orderPanel = document.getElementById('panelStudentOrder');
+      const myOrdersPanel = document.getElementById('panelStudentMyOrders');
+      const btnOrder = document.getElementById('btnSubTabOrder');
+      const btnMyOrders = document.getElementById('btnSubTabMyOrders');
+
+      if (tab === 'order') {
+        orderPanel.classList.remove('hidden');
+        myOrdersPanel.classList.add('hidden');
+        btnOrder.className = "pb-2 border-b-2 border-orange-600 font-bold text-xs sm:text-sm text-orange-600 flex items-center space-x-1.5 sm:space-x-2";
+        btnMyOrders.className = "pb-2 border-b-2 border-transparent font-medium text-xs sm:text-sm text-slate-500 hover:text-slate-900 flex items-center space-x-1.5 sm:space-x-2";
+      } else {
+        orderPanel.classList.add('hidden');
+        myOrdersPanel.classList.remove('hidden');
+        btnOrder.className = "pb-2 border-b-2 border-transparent font-medium text-xs sm:text-sm text-slate-500 hover:text-slate-900 flex items-center space-x-1.5 sm:space-x-2";
+        btnMyOrders.className = "pb-2 border-b-2 border-orange-600 font-bold text-xs sm:text-sm text-orange-600 flex items-center space-x-1.5 sm:space-x-2";
+        renderStudentPersonalOrders();
+      }
+    }
+
+    function setCategoryFilter(cat) {
+      activeCategory = cat;
+      const pills = document.querySelectorAll('.cat-pill');
+      pills.forEach(p => {
+        if (p.textContent.trim().toLowerCase().includes(cat.toLowerCase()) || (cat === 'all' && p.textContent.includes('All'))) {
+          p.className = 'cat-pill active px-3 py-1.5 rounded-xl text-xs font-bold bg-orange-600 text-white shadow-sm whitespace-nowrap';
+        } else {
+          p.className = 'cat-pill px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200 whitespace-nowrap';
+        }
+      });
+      renderStudentCatalog();
+    }
+
+    function renderStudentCatalog() {
+      const grid = document.getElementById('foodCatalogGrid');
+      const search = (document.getElementById('menuSearchInput').value || '').trim().toLowerCase();
+
+      const filtered = menuItems.filter(item => {
+        const matchesCategory = (activeCategory === 'all') || (item.category.toLowerCase() === activeCategory.toLowerCase());
+        const matchesSearch = item.name.toLowerCase().includes(search) || item.desc.toLowerCase().includes(search);
+        return matchesCategory && matchesSearch;
+      });
+
+      if (filtered.length === 0) {
+        grid.innerHTML = `
+          <div class="col-span-full py-10 text-center text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
+            <i class="fa-solid fa-utensils text-3xl mb-2 text-slate-300"></i>
+            <p class="font-bold text-xs">No matching dishes found in the menu.</p>
+          </div>
+        `;
+        return;
+      }
+
+      grid.innerHTML = filtered.map(item => {
+        const inCart = studentCart[item.id] ? studentCart[item.id].qty : 0;
+        const isAvailable = item.available;
+
+        return `
+          <div class="bg-white rounded-2xl sm:rounded-3xl border ${isAvailable ? 'border-slate-200 shadow-sm hover:shadow-md' : 'border-slate-200 opacity-70'} overflow-hidden flex flex-col justify-between transition-all group">
+            
+            <div class="relative h-36 sm:h-40 w-full overflow-hidden bg-slate-100">
+              <img src="${item.image}" alt="${item.name}" 
+                   onerror="this.src='https://placehold.co/600x400/ea580c/ffffff?text=${encodeURIComponent(item.name)}'" 
+                   class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500">
+              
+              <div class="absolute top-2.5 left-2.5">
+                <span class="text-[9px] sm:text-[10px] font-black uppercase px-2 py-0.5 rounded-full bg-white/90 backdrop-blur-md text-slate-800 shadow-sm">
+                  ${item.category}
+                </span>
+              </div>
+              <div class="absolute top-2.5 right-2.5">
+                ${isAvailable ? `
+                  <span class="text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-500 text-white shadow-sm flex items-center space-x-1">
+                    <i class="fa-solid fa-check text-[8px]"></i>
+                    <span>In Stock</span>
+                  </span>
+                ` : `
+                  <span class="text-[9px] sm:text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-rose-600 text-white shadow-sm flex items-center space-x-1">
+                    <i class="fa-solid fa-ban text-[8px]"></i>
+                    <span>Out of Stock</span>
+                  </span>
+                `}
+              </div>
+            </div>
+
+            <div class="p-3.5 sm:p-4 flex-1 flex flex-col justify-between">
+              <div>
+                <h4 class="font-display font-extrabold text-slate-900 text-xs sm:text-sm group-hover:text-orange-600 transition-colors">${item.name}</h4>
+                <p class="text-[11px] sm:text-xs text-slate-500 mt-1 line-clamp-2">${item.desc}</p>
+              </div>
+
+              <div class="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                <div>
+                  <span class="text-[10px] text-slate-400 font-medium">Price</span>
+                  <p class="font-display font-black text-slate-900 text-sm sm:text-base">₹${item.price}</p>
+                </div>
+
+                ${isAvailable ? `
+                  ${inCart > 0 ? `
+                    <div class="flex items-center space-x-1.5 bg-orange-50 rounded-xl p-1 border border-orange-200">
+                      <button onclick="decrementTray('${item.id}')" class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-white text-orange-600 hover:bg-orange-600 hover:text-white font-black text-xs flex items-center justify-center transition-colors shadow-sm">
+                        <i class="fa-solid fa-minus text-[9px]"></i>
+                      </button>
+                      <span class="text-xs font-black text-orange-900 px-1.5">${inCart}</span>
+                      <button onclick="addToTray('${item.id}')" class="w-6 h-6 sm:w-7 sm:h-7 rounded-lg bg-white text-orange-600 hover:bg-orange-600 hover:text-white font-black text-xs flex items-center justify-center transition-colors shadow-sm">
+                        <i class="fa-solid fa-plus text-[9px]"></i>
+                      </button>
+                    </div>
+                  ` : `
+                    <button onclick="addToTray('${item.id}')" class="px-3 py-1.5 sm:px-3.5 sm:py-2 bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white text-xs font-bold rounded-xl shadow-md shadow-orange-600/20 transition-all flex items-center space-x-1">
+                      <i class="fa-solid fa-plus text-[9px]"></i>
+                      <span>Add</span>
+                    </button>
+                  `}
+                ` : `
+                  <button onclick="showToast('Out of Stock', 'This dish is sold out in the kitchen.', 'warning')" class="px-2.5 py-1.5 bg-slate-200 text-slate-400 text-xs font-bold rounded-xl cursor-not-allowed">
+                    Sold Out
+                  </button>
+                `}
+              </div>
+            </div>
+
+          </div>
+        `;
+      }).join('');
+    }
+
+    function addToTray(itemId) {
+      const item = menuItems.find(m => m.id === itemId);
+      if (!item) return;
+
+      if (!item.available) {
+        showToast("Item Unavailable", `"${item.name}" is sold out. Please select another item.`, "warning");
+        return;
+      }
+
+      if (!studentCart[itemId]) {
+        studentCart[itemId] = { item, qty: 1 };
+      } else {
+        studentCart[itemId].qty += 1;
+      }
+
+      renderTrayUI();
+      renderStudentCatalog();
+    }
+
+    function decrementTray(itemId) {
+      if (!studentCart[itemId]) return;
+      studentCart[itemId].qty -= 1;
+      if (studentCart[itemId].qty <= 0) {
+        delete studentCart[itemId];
+      }
+      renderTrayUI();
+      renderStudentCatalog();
+    }
+
+    function removeTrayItem(itemId) {
+      delete studentCart[itemId];
+      renderTrayUI();
+      renderStudentCatalog();
+    }
+
+    function renderTrayUI() {
+      const container = document.getElementById('trayItemsContainer');
+      const badge = document.getElementById('trayItemCountBadge');
+      const subtotalEl = document.getElementById('traySubtotal');
+      const grandTotalEl = document.getElementById('trayGrandTotal');
+      const submitBtn = document.getElementById('btnSubmitOrder');
+
+      const keys = Object.keys(studentCart);
+      let count = 0;
+      let total = 0;
+
+      if (keys.length === 0) {
+        container.innerHTML = `
+          <div class="py-8 text-center text-slate-400 text-xs">
+            <i class="fa-solid fa-plate-wheat text-3xl mb-2 text-slate-300"></i>
+            <p class="font-semibold">Your tray is empty</p>
+            <p class="text-[11px] text-slate-400 mt-0.5">Select delicious snacks or meals from the canteen menu.</p>
+          </div>
+        `;
+        badge.textContent = '0 items';
+        subtotalEl.textContent = '₹0';
+        grandTotalEl.textContent = '₹0';
+        submitBtn.disabled = true;
+        return;
+      }
+
+      submitBtn.disabled = false;
+
+      let html = '';
+      keys.forEach(k => {
+        const line = studentCart[k];
+        const lineTotal = line.qty * line.item.price;
+        count += line.qty;
+        total += lineTotal;
+
+        html += `
+          <div class="py-2 flex items-center justify-between text-xs">
+            <div class="flex-1 pr-2 truncate">
+              <p class="font-bold text-slate-800 leading-tight truncate">${line.item.name}</p>
+              <p class="text-slate-400 text-[11px]">₹${line.item.price} × ${line.qty} = <span class="font-bold text-slate-700">₹${lineTotal}</span></p>
+            </div>
+            <div class="flex items-center space-x-1 shrink-0">
+              <button onclick="decrementTray('${line.item.id}')" class="w-6 h-6 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-black flex items-center justify-center text-xs">-</button>
+              <span class="w-4 text-center font-black text-slate-800 text-xs">${line.qty}</span>
+              <button onclick="addToTray('${line.item.id}')" class="w-6 h-6 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-black flex items-center justify-center text-xs">+</button>
+              <button onclick="removeTrayItem('${line.item.id}')" class="text-rose-500 hover:text-rose-700 ml-1 p-1" title="Remove">
+                <i class="fa-solid fa-trash-can text-xs"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      });
+
+      container.innerHTML = html;
+      badge.textContent = `${count} item${count > 1 ? 's' : ''}`;
+      subtotalEl.textContent = `₹${total}`;
+      grandTotalEl.textContent = `₹${total}`;
+    }
+
+    /* PAYMENT GATEWAY MODAL LOGIC */
+    function openPaymentModal() {
+      const keys = Object.keys(studentCart);
+      if (keys.length === 0) {
+        showToast("Tray Empty", "Add dishes to your tray first.", "warning");
+        return;
+      }
+
+      // Out of stock guard
+      for (const k of keys) {
+        const item = menuItems.find(m => m.id === k);
+        if (!item || !item.available) {
+          showToast("Item Out of Stock", `"${studentCart[k].item.name}" has run out of stock. Please remove it from tray.`, "error");
+          return;
+        }
+      }
+
+      const total = keys.reduce((sum, k) => sum + (studentCart[k].item.price * studentCart[k].qty), 0);
+      document.getElementById('payModalAmount').textContent = `₹${total}`;
+
+      // Build real UPI QR code via QuickChart QR API
+      const upiUrl = `upi://pay?pa=canteen@cyberhunt.upi&pn=Cyberhunt%20Canteen&am=${total}&cu=INR&tn=Canteen%20Order`;
+      const qrApi = `https://quickchart.io/qr?text=${encodeURIComponent(upiUrl)}&size=200&margin=1`;
+      document.getElementById('upiQrImage').src = qrApi;
+      document.getElementById('btnUpiIntentLink').href = upiUrl;
+
+      selectPaymentMode('UPI');
+      document.getElementById('paymentModal').classList.remove('hidden');
+    }
+
+    function closePaymentModal() {
+      document.getElementById('paymentModal').classList.add('hidden');
+    }
+
+    function selectPaymentMode(mode) {
+      selectedPayMode = mode;
+      const btnUPI = document.getElementById('btnPayUPI');
+      const btnCash = document.getElementById('btnPayCash');
+      const secUPI = document.getElementById('sectionPayUPI');
+      const secCash = document.getElementById('sectionPayCash');
+      const confirmLabel = document.getElementById('btnConfirmPaymentLabel');
+
+      if (mode === 'UPI') {
+        btnUPI.className = "p-3 border-2 border-orange-600 bg-orange-50/50 rounded-2xl text-left transition-all";
+        btnCash.className = "p-3 border-2 border-slate-200 bg-white hover:border-slate-300 rounded-2xl text-left transition-all";
+        secUPI.classList.remove('hidden');
+        secCash.classList.add('hidden');
+        confirmLabel.textContent = "Place Order (UPI payment pending)";
+      } else {
+        btnCash.className = "p-3 border-2 border-emerald-600 bg-emerald-50/50 rounded-2xl text-left transition-all";
+        btnUPI.className = "p-3 border-2 border-slate-200 bg-white hover:border-slate-300 rounded-2xl text-left transition-all";
+        secCash.classList.remove('hidden');
+        secUPI.classList.add('hidden');
+        confirmLabel.textContent = "Confirm Order (Pay Cash at Counter)";
+      }
+    }
+
+    function copyUpiId() {
+      const upi = "canteen@cyberhunt.upi";
+      const dummy = document.createElement("input");
+      document.body.appendChild(dummy);
+      dummy.value = upi;
+      dummy.select();
+      document.execCommand("copy");
+      document.body.removeChild(dummy);
+      showToast("UPI Copied", "UPI ID canteen@cyberhunt.upi copied to clipboard!", "success");
+    }
+
+    function confirmOrderWithPayment() {
+      closePaymentModal();
+      submitStudentOrder(selectedPayMode);
+    }
+
+    /* ORDER SUBMISSION & DUAL-PORTAL REALTIME SYNC */
+    function submitStudentOrder(payMode = 'UPI') {
+      const keys = Object.keys(studentCart);
+      if (keys.length === 0) return;
+
+      const orderItems = keys.map(k => ({
+        id: studentCart[k].item.id,
+        name: studentCart[k].item.name,
+        price: studentCart[k].item.price,
+        qty: studentCart[k].qty
+      }));
+
+      const totalPrice = keys.reduce((sum, k) => sum + (studentCart[k].item.price * studentCart[k].qty), 0);
+
+      const highestToken = orders.reduce((max, o) => Math.max(max, o.token || 100), 100);
+      const newToken = highestToken + 1;
+
+      const newOrder = {
+        id: `ORD-${newToken}`,
+        token: newToken,
+        studentRoll: currentUser.roll,
+        studentName: currentUser.name,
+        items: orderItems,
+        totalPrice: totalPrice,
+        paymentMode: payMode,
+        paymentStatus: 'Pending',
+        status: 'New',
+        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      };
+
+      orders.unshift(newOrder);
+      studentCart = {};
+      saveStorage();
+
+      // Instantly sync both Student and Staff views
+      renderTrayUI();
+      renderStudentCatalog();
+      renderStudentMetrics();
+      renderStudentPersonalOrders();
+      renderStaffOrdersQueue();
+      updateStaffAnalytics();
+      updateRushMeterUI();
+
+      // Show instant confirmation modal
+      document.getElementById('popupTokenNum').textContent = newOrder.token;
+      document.getElementById('popupTotalAmount').textContent = `₹${newOrder.totalPrice}`;
+      document.getElementById('popupPaymentMode').textContent = payMode === 'UPI' ? 'UPI (Paid)' : 'Cash at Counter (Pending)';
+      document.getElementById('orderSuccessModal').classList.remove('hidden');
+
+      showToast("Order Dispatched!", `Token #${newOrder.token} sent to Kitchen. Status: New`, "success");
+    }
+
+    function closeSuccessModal() {
+      document.getElementById('orderSuccessModal').classList.add('hidden');
+    }
+
+    function closeSuccessModalAndShowOrders() {
+      closeSuccessModal();
+      setStudentSubTab('myorders');
+    }
+
+    function renderStudentPersonalOrders() {
+      const container = document.getElementById('studentPersonalOrdersGrid');
+      if (!currentUser || currentUser.role !== 'student') return;
+
+      const myOrders = orders.filter(o => o.studentRoll === currentUser.roll);
+
+      if (myOrders.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full py-12 text-center text-slate-400 bg-white rounded-3xl border border-dashed border-slate-200">
+            <i class="fa-solid fa-receipt text-3xl mb-2 text-slate-300"></i>
+            <h4 class="font-bold text-slate-700 text-sm">No Orders Placed Yet</h4>
+            <p class="text-xs text-slate-400 mt-1">Order your first snack to track kitchen preparation status!</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = myOrders.map(order => {
+        let step = 1;
+        let badgeStyle = "bg-blue-100 text-blue-800 border-blue-200";
+        let statusIcon = "fa-receipt";
+
+        if (order.status === 'Preparing') {
+          step = 2;
+          badgeStyle = "bg-amber-100 text-amber-800 border-amber-200";
+          statusIcon = "fa-fire-burner animate-bounce";
+        } else if (order.status === 'Ready') {
+          step = 3;
+          badgeStyle = "bg-emerald-100 text-emerald-800 border-emerald-300 shadow-sm";
+          statusIcon = "fa-bell ring-2 ring-emerald-300";
+        } else if (order.status === 'Collected') {
+          step = 4;
+          badgeStyle = "bg-slate-100 text-slate-600 border-slate-200";
+          statusIcon = "fa-circle-check";
+        }
+
+        const isReady = order.status === 'Ready';
+
+        return `
+          <div class="bg-white rounded-3xl border ${isReady ? 'border-emerald-300 ring-2 ring-emerald-300 shadow-lg' : 'border-slate-200 shadow-sm'} p-4 sm:p-5 relative overflow-hidden">
+            
+            ${isReady ? `
+              <div class="bg-emerald-600 text-white text-[10px] uppercase font-black tracking-widest text-center py-1 absolute top-0 inset-x-0">
+                HOT & READY! PICK UP AT COUNTER
+              </div>
+            ` : ''}
+
+            <div class="${isReady ? 'pt-3' : ''}">
+              <div class="flex items-center justify-between pb-2.5 border-b border-slate-100">
+                <div>
+                  <span class="text-[9px] font-mono font-bold text-slate-400">CANTEEN TOKEN</span>
+                  <h4 class="text-xl sm:text-2xl font-display font-black text-slate-900">#${order.token}</h4>
+                </div>
+                <div class="text-right">
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold border ${badgeStyle}">
+                    <i class="fa-solid ${statusIcon} mr-1 text-[9px]"></i>
+                    ${order.status}
+                  </span>
+                  <p class="text-[10px] text-slate-400 mt-0.5">${order.createdAt}</p>
+                </div>
+              </div>
+
+              <div class="py-2.5 space-y-1 text-xs text-slate-600">
+                ${order.items.map(it => `
+                  <div class="flex justify-between">
+                    <span>${it.qty}× ${it.name}</span>
+                    <span class="font-bold text-slate-700">₹${it.price * it.qty}</span>
+                  </div>
+                `).join('')}
+              </div>
+
+              <div class="pt-2 border-t border-slate-100 flex justify-between items-center text-xs">
+                <div>
+                  <span class="text-slate-400 text-[11px]">Payment: </span>
+                  <span class="font-bold ${order.paymentStatus === 'Paid' ? 'text-emerald-600' : 'text-amber-600'}">
+                    ${order.paymentMode || 'UPI'} (${order.paymentStatus || 'Paid'})
+                  </span>
+                </div>
+                <span class="font-display font-black text-slate-900 text-sm">₹${order.totalPrice}</span>
+              </div>
+
+              <!-- Step Timeline Indicator -->
+              <div class="mt-3 pt-2.5 border-t border-slate-100 grid grid-cols-4 gap-1 text-[9px] text-center font-bold">
+                <div class="${step >= 1 ? 'text-blue-600' : 'text-slate-300'}">
+                  <div class="h-1 rounded-full mb-1 ${step >= 1 ? 'bg-blue-600' : 'bg-slate-200'}"></div>
+                  New
+                </div>
+                <div class="${step >= 2 ? 'text-amber-600' : 'text-slate-300'}">
+                  <div class="h-1 rounded-full mb-1 ${step >= 2 ? 'bg-amber-500' : 'bg-slate-200'}"></div>
+                  Cooking
+                </div>
+                <div class="${step >= 3 ? 'text-emerald-600' : 'text-slate-300'}">
+                  <div class="h-1 rounded-full mb-1 ${step >= 3 ? 'bg-emerald-500' : 'bg-slate-200'}"></div>
+                  Ready
+                </div>
+                <div class="${step >= 4 ? 'text-slate-700' : 'text-slate-300'}">
+                  <div class="h-1 rounded-full mb-1 ${step >= 4 ? 'bg-slate-700' : 'bg-slate-200'}"></div>
+                  Collected
+                </div>
+              </div>
+            </div>
+
+          </div>
+        `;
+      }).join('');
+    }
+
+    /* STAFF DASHBOARD CONTROLLER (KITCHEN CONSOLE) */
+    function renderStaffDashboard() {
+      document.getElementById('headerUserName').textContent = currentUser.name;
+      document.getElementById('headerUserRole').textContent = "Staff Command";
+      document.getElementById('headerUserAvatar').innerHTML = `<i class="fa-solid fa-fire-burner"></i>`;
+
+      renderStaffOrdersQueue();
+      renderStaffStockTable();
+      updateStaffAnalytics();
+      updateRushMeterUI();
+    }
+
+    function switchStaffSection(sec) {
+      const ordersSec = document.getElementById('staffSectionOrders');
+      const stockSec = document.getElementById('staffSectionStock');
+      const btnOrders = document.getElementById('staffNavOrdersBtn');
+      const btnStock = document.getElementById('staffNavStockBtn');
+
+      if (sec === 'orders') {
+        ordersSec.classList.remove('hidden');
+        stockSec.classList.add('hidden');
+        btnOrders.className = "pb-3 border-b-2 border-orange-600 font-bold text-xs sm:text-sm text-orange-600 flex items-center space-x-2 whitespace-nowrap";
+        btnStock.className = "pb-3 border-b-2 border-transparent font-medium text-xs sm:text-sm text-slate-500 hover:text-slate-900 flex items-center space-x-2 whitespace-nowrap";
+        renderStaffOrdersQueue();
+      } else {
+        ordersSec.classList.add('hidden');
+        stockSec.classList.remove('hidden');
+        btnOrders.className = "pb-3 border-b-2 border-transparent font-medium text-xs sm:text-sm text-slate-500 hover:text-slate-900 flex items-center space-x-2 whitespace-nowrap";
+        btnStock.className = "pb-3 border-b-2 border-orange-600 font-bold text-xs sm:text-sm text-orange-600 flex items-center space-x-2 whitespace-nowrap";
+        renderStaffStockTable();
+      }
+    }
+
+    function filterStaffOrders(status) {
+      currentStaffFilter = status;
+      document.querySelectorAll('.staff-flt-btn').forEach(b => {
+        if (b.textContent.trim().toUpperCase() === status.toUpperCase()) {
+          b.className = 'staff-flt-btn active px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-900 text-white';
+        } else {
+          b.className = 'staff-flt-btn px-2.5 py-1 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200';
+        }
+      });
+      renderStaffOrdersQueue();
+    }
+
+    function updateOrderStatus(orderId, newStatus) {
+      const order = orders.find(o => o.id === orderId);
+      if (!order) return;
+
+      order.status = newStatus;
+      saveStorage();
+
+      renderStaffOrdersQueue();
+      updateStaffAnalytics();
+      updateRushMeterUI();
+
+      showToast("Order Shifted", `Token #${order.token} marked as ${newStatus}.`, "info");
+    }
+
+    function markCashCollected(orderId) {
+      const order = orders.find(o => o.id === orderId);
+      if (!order) return;
+
+      order.paymentStatus = 'Paid';
+      saveStorage();
+
+      renderStaffOrdersQueue();
+      updateStaffAnalytics();
+      showToast("Cash Collected", `₹${order.totalPrice} marked Paid for Token #${order.token}`, "success");
+    }
+
+    function renderStaffOrdersQueue() {
+      const container = document.getElementById('staffOrdersList');
+
+      const filtered = orders.filter(o => {
+        if (currentStaffFilter === 'ALL') return true;
+        return o.status === currentStaffFilter;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="py-10 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+            <i class="fa-solid fa-inbox text-3xl mb-2 text-slate-300"></i>
+            <p class="text-xs font-medium">No kitchen orders matching filter "${currentStaffFilter}".</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(order => {
+        const isActive = order.status !== 'Collected';
+        const isCashPending = order.paymentStatus !== 'Paid';
+
+        return `
+          <div class="bg-white p-3.5 sm:p-4 rounded-2xl border ${isActive ? 'border-slate-200 shadow-sm' : 'border-slate-100 bg-slate-50 opacity-80'} flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4">
+            
+            <div class="flex items-start space-x-3">
+              <div class="w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-slate-100 border border-slate-200 flex flex-col items-center justify-center font-display font-black text-slate-900 shrink-0">
+                <span class="text-[8px] text-slate-400 font-mono">TOKEN</span>
+                <span class="text-sm sm:text-base">#${order.token}</span>
+              </div>
+              <div>
+                <div class="flex items-center space-x-2 flex-wrap">
+                  <h4 class="font-bold text-slate-900 text-xs sm:text-sm">${order.studentName}</h4>
+                  <span class="text-[10px] font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">${order.studentRoll}</span>
+                  ${isActive ? '<span class="text-[9px] font-extrabold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-100">Cooking</span>' : '<span class="text-[9px] font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full">Archived</span>'}
+                </div>
+                <div class="text-[11px] sm:text-xs text-slate-500 mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                  <span>Time: <strong>${order.createdAt}</strong></span>
+                  <span>Items: <strong>${order.items.map(i => `${i.qty}× ${i.name}`).join(', ')}</strong></span>
+                  <span class="text-orange-600 font-bold">Total: ₹${order.totalPrice}</span>
+                  <span class="font-bold ${order.paymentStatus === 'Paid' ? 'text-emerald-600' : 'text-amber-600'}">
+                    Pay: ${order.paymentMode || 'UPI'} (${order.paymentStatus || 'Paid'})
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex items-center space-x-1.5 flex-wrap pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+              ${isCashPending ? `
+                <button onclick="markCashCollected('${order.id}')" class="px-2.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center space-x-1">
+                  <i class="fa-solid fa-hand-holding-dollar text-[10px]"></i>
+                  <span>${order.paymentMode === 'CASH' ? 'Collect Cash' : 'Verify UPI'} ₹${order.totalPrice}</span>
+                </button>
+              ` : ''}
+
+              <button onclick="updateOrderStatus('${order.id}', 'New')" class="px-2.5 py-1.5 rounded-xl text-xs font-bold ${order.status === 'New' ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">
+                New
+              </button>
+
+              <button onclick="updateOrderStatus('${order.id}', 'Preparing')" class="px-2.5 py-1.5 rounded-xl text-xs font-bold ${order.status === 'Preparing' ? 'bg-amber-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">
+                Cooking
+              </button>
+
+              <button onclick="updateOrderStatus('${order.id}', 'Ready')" class="px-2.5 py-1.5 rounded-xl text-xs font-bold ${order.status === 'Ready' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}">
+                Ready
+              </button>
+
+              <button onclick="updateOrderStatus('${order.id}', 'Collected')" class="px-2.5 py-1.5 rounded-xl text-xs font-bold ${order.status === 'Collected' ? 'bg-slate-800 text-white shadow-sm' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}" title="Mark Collected: removes from active rush!">
+                <i class="fa-solid fa-check mr-1 text-[10px]"></i>Done
+              </button>
+            </div>
+
+          </div>
+        `;
+      }).join('');
+    }
+
+    function toggleStockAvailability(itemId) {
+      const item = menuItems.find(m => m.id === itemId);
+      if (!item) return;
+
+      item.available = !item.available;
+
+      if (!item.available && studentCart[itemId]) {
+        delete studentCart[itemId];
+      }
+
+      saveStorage();
+      renderStaffStockTable();
+      renderStudentCatalog();
+
+      const msg = item.available 
+        ? `"${item.name}" is now marked IN STOCK.` 
+        : `"${item.name}" is now marked OUT OF STOCK. Students cannot order it.`;
+
+      showToast(item.available ? "Stock Available" : "Item Unavailable", msg, item.available ? "success" : "warning");
+    }
+
+    function renderStaffStockTable() {
+      const tbody = document.getElementById('staffStockTableBody');
+      tbody.innerHTML = menuItems.map(item => {
+        return `
+          <tr class="hover:bg-slate-50/80 transition-colors">
+            <td class="py-2.5 px-3 sm:px-4 flex items-center space-x-2.5">
+              <img src="${item.image}" alt="${item.name}" class="w-9 h-9 sm:w-10 sm:h-10 rounded-xl object-cover border border-slate-200 shrink-0">
+              <div class="truncate max-w-[140px] sm:max-w-none">
+                <p class="font-bold text-slate-900 truncate">${item.name}</p>
+                <p class="text-[10px] text-slate-400 line-clamp-1">${item.desc}</p>
+              </div>
+            </td>
+            <td class="py-2.5 px-3 sm:px-4">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">${item.category}</span>
+            </td>
+            <td class="py-2.5 px-3 sm:px-4 font-bold text-slate-900">₹${item.price}</td>
+            <td class="py-2.5 px-3 sm:px-4">
+              <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${item.available ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}">
+                <i class="fa-solid ${item.available ? 'fa-check' : 'fa-ban'} mr-1"></i>
+                ${item.available ? 'In Stock' : 'Out of Stock'}
+              </span>
+            </td>
+            <td class="py-2.5 px-3 sm:px-4 text-right">
+              <button onclick="toggleStockAvailability('${item.id}')" class="px-2.5 py-1 rounded-xl text-xs font-bold transition-all ${item.available ? 'bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white border border-rose-200' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white border border-emerald-200'}">
+                ${item.available ? 'Disable' : 'Enable'}
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function updateStaffAnalytics() {
+      const totalOrders = orders.length;
+      const totalSales = orders.reduce((sum, o) => sum + o.totalPrice, 0);
+
+      document.getElementById('staffTotalServedCount').textContent = `${totalOrders} Orders`;
+      document.getElementById('staffRevenueStat').textContent = `₹${totalSales} Gross Sales`;
+    }
+
+    function openNewDishModal() {
+      document.getElementById('newDishModal').classList.remove('hidden');
+    }
+    function closeNewDishModal() {
+      document.getElementById('newDishModal').classList.add('hidden');
+    }
+
+    function saveNewDish() {
+      const name = (document.getElementById('newDishName').value || '').trim();
+      const price = parseFloat(document.getElementById('newDishPrice').value);
+      const cat = document.getElementById('newDishCat').value;
+      let img = (document.getElementById('newDishImage').value || '').trim();
+      const desc = (document.getElementById('newDishDesc').value || '').trim() || 'Fresh canteen preparation';
+
+      if (!name || isNaN(price) || price <= 0) {
+        showToast("Invalid Input", "Please enter a valid item name and price.", "warning");
+        return;
+      }
+
+      if (!img) {
+        img = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80';
+      }
+
+      const newDish = {
+        id: `dish-${Date.now()}`,
+        name,
+        category: cat,
+        price,
+        available: true,
+        desc,
+        image: img
+      };
+
+      menuItems.unshift(newDish);
+      saveStorage();
+
+      document.getElementById('newDishName').value = '';
+      document.getElementById('newDishPrice').value = '';
+      document.getElementById('newDishImage').value = '';
+      document.getElementById('newDishDesc').value = '';
+
+      closeNewDishModal();
+      renderStaffStockTable();
+      renderStudentCatalog();
+
+      showToast("Dish Added", `"${name}" is live on the menu!`, "success");
+    }
+
+    /* SURGE SIMULATION (JUDGE DEMO TOOLS) */
+    function injectJudgeSurge(qty) {
+      const names = ['Pooja', 'Tanmay', 'Ishaan', 'Devansh', 'Kunal', 'Sanya', 'Vikram', 'Meera'];
+      const available = menuItems.filter(m => m.available);
+
+      if (available.length === 0) {
+        showToast("Error", "No available items in stock to order.", "error");
+        return;
+      }
+
+      for (let i = 0; i < qty; i++) {
+        const dish = available[Math.floor(Math.random() * available.length)];
+        const studentName = names[Math.floor(Math.random() * names.length)] + ` (Demo ${i+1})`;
+        
+        orders.unshift({
+          id: `ORD-${orderCounter}`,
+          token: orderCounter,
+          studentRoll: `DEMO-${1000 + i}`,
+          studentName: studentName,
+          items: [{ id: dish.id, name: dish.name, price: dish.price, qty: 1 }],
+          totalPrice: dish.price,
+          paymentMode: i % 2 === 0 ? 'UPI' : 'CASH',
+          paymentStatus: i % 2 === 0 ? 'Paid' : 'Pending',
+          status: i % 3 === 0 ? 'New' : 'Preparing',
+          createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        orderCounter++;
+      }
+
+      saveStorage();
+      updateRushMeterUI();
+      renderStaffOrdersQueue();
+      updateStaffAnalytics();
+
+      showToast("Surge Activated!", `Added ${qty} orders. Active Kitchen Load is now ${calculateRushState().level} Rush!`, "info");
+    }
+
+    function resetAllDemoData() {
+      menuItems = [...INITIAL_MENU];
+      orders = [...INITIAL_ORDERS];
+      studentUsers = [...INITIAL_USERS];
+      studentCart = {};
+      orderCounter = 104;
+      saveStorage();
+
+      renderDashboardForCurrentRole();
+      showToast("Data Restored", "All demo orders, menus, and accounts reset to default.", "info");
+    }
+
+    function renderDashboardForCurrentRole() {
+      const viewStudent = document.getElementById('viewStudent');
+      const viewStaff = document.getElementById('viewStaff');
+
+      if (!currentUser) return;
+
+      if (currentUser.role === 'student') {
+        viewStudent.classList.remove('hidden');
+        viewStaff.classList.add('hidden');
+        renderStudentDashboard();
+      } else {
+        viewStudent.classList.add('hidden');
+        viewStaff.classList.remove('hidden');
+        renderStaffDashboard();
+      }
+    }
+
+    /* TOAST ALERTS */
+    let toastTimer = null;
+    function showToast(title, msg, type = 'info') {
+      const box = document.getElementById('toastBox');
+      const titleEl = document.getElementById('toastTitle');
+      const msgEl = document.getElementById('toastMessage');
+      const iconEl = document.getElementById('toastIcon');
+
+      titleEl.textContent = title;
+      msgEl.textContent = msg;
+
+      if (type === 'success') {
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-400"></i>';
+      } else if (type === 'warning') {
+        iconEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-amber-400"></i>';
+      } else if (type === 'error') {
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-xmark text-rose-400"></i>';
+      } else {
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-info text-sky-400"></i>';
+      }
+
+      box.classList.remove('translate-y-28', 'opacity-0', 'pointer-events-none');
+      box.classList.add('translate-y-0', 'opacity-100');
+
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        box.classList.remove('translate-y-0', 'opacity-100');
+        box.classList.add('translate-y-28', 'opacity-0', 'pointer-events-none');
+      }, 3500);
+    }
+
+    // Window load bootstrap & cross-tab sync
+    window.onload = function () {
+      initAppState();
+      updateRushMeterUI();
+
+      if (currentUser) {
+        const authScreen = document.getElementById('authScreen');
+        if (authScreen) authScreen.classList.add('hidden');
+        renderDashboardForCurrentRole();
+      } else {
+        switchAuthRole('student');
+      }
+
+      // Synchronize across multiple browser tabs automatically
+      window.addEventListener('storage', (e) => {
+        if (e.key === STORAGE_KEY_ORDERS || e.key === STORAGE_KEY_MENU) {
+          initAppState();
+          updateRushMeterUI();
+          if (currentUser) renderDashboardForCurrentRole();
+        }
+      });
+    };
+  
+
+    // =====================================================================
+    // FIREBASE CLOUD DATA LAYER (overrides local-only demo persistence)
+    // Collections: users, menuItems, orders, notifications, stats/rush, counters/orders
+    // =====================================================================
+    const firebaseConfig = {
+      apiKey: "AIzaSyAYIl57Tx91h66MscXjt4-95T7yJs3gGSg",
+      authDomain: "canteen-49cb5.firebaseapp.com",
+      projectId: "canteen-49cb5",
+      storageBucket: "canteen-49cb5.firebasestorage.app",
+      messagingSenderId: "931860846777",
+      appId: "1:931860846777:web:c04ba961dc0e915e96a368",
+      measurementId: "G-EDJX43FS2Q"
+    };
+
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const fbAuth = firebase.auth();
+    const cloudDb = firebase.firestore();
+    const STAFF_AUTH_EMAIL = 'staff101@staff.canteenpulse.com';
+    let globalActiveCount = 0;
+    let cloudUnsubscribers = [];
+    let notificationUnsubscribe = null;
+    let authActionInProgress = false;
+    let cloudBootstrapped = false;
+    let cloudDataReady = false;
+    let cloudNotifications = [];
+
+    function studentEmailFromRoll(roll) {
+      const slug = String(roll || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (slug.length < 2) throw new Error('Roll / Student ID mein kam se kam 2 letters ya numbers hone chahiye.');
+      return `${slug}@students.canteenpulse.com`;
+    }
+
+    function isFirebaseStaff(user) {
+      return !!user && String(user.email || '').toLowerCase() === STAFF_AUTH_EMAIL;
+    }
+
+    function cloudErrorMessage(error) {
+      const code = error && error.code ? error.code : '';
+      if (code.includes('auth/email-already-in-use')) return 'Is Roll ID ka account pehle se bana hua hai. Sign In use karo.';
+      if (code.includes('auth/invalid-credential') || code.includes('auth/wrong-password') || code.includes('auth/user-not-found')) return 'Roll ID ya password galat hai.';
+      if (code.includes('auth/weak-password')) return 'Password kam se kam 6 characters ka rakho.';
+      if (code.includes('auth/operation-not-allowed')) return 'Firebase Console mein Authentication > Email/Password enable karo.';
+      if (code.includes('permission-denied')) return 'Firestore permission denied. firestore.rules file ke rules Firebase Console mein publish karo.';
+      if (code.includes('unavailable') || code.includes('network-request-failed')) return 'Internet/Firebase connection check karo.';
+      return (error && error.message) ? error.message : 'Unexpected Firebase error.';
+    }
+
+    function showAuthScreen() {
+      const screen = document.getElementById('authScreen');
+      const card = document.getElementById('authCard');
+      if (screen) screen.classList.remove('hidden');
+      if (card) card.classList.remove('dismiss-auth');
+    }
+
+    function stopCloudListeners() {
+      cloudUnsubscribers.forEach(unsub => { try { unsub(); } catch (_) {} });
+      cloudUnsubscribers = [];
+      if (notificationUnsubscribe) {
+        try { notificationUnsubscribe(); } catch (_) {}
+        notificationUnsubscribe = null;
+      }
+    }
+
+    // Seed is intentionally staff-only; students cannot initialize or overwrite shared menu data.
+    async function ensureInitialCloudData() {
+      const menuSnap = await cloudDb.collection('menuItems').limit(1).get();
+      if (menuSnap.empty) {
+        const batch = cloudDb.batch();
+        INITIAL_MENU.forEach(item => batch.set(cloudDb.collection('menuItems').doc(item.id), item));
+        await batch.commit();
+      }
+      const statsRef = cloudDb.collection('stats').doc('rush');
+      const statsSnap = await statsRef.get();
+      if (!statsSnap.exists) await statsRef.set({ activeCount: 0, level: 'Low', updatedAtMs: Date.now() });
+      const counterRef = cloudDb.collection('counters').doc('orders');
+      const counterSnap = await counterRef.get();
+      if (!counterSnap.exists) await counterRef.set({ lastToken: 100 });
+    }
+
+    async function hydrateSignedInUser(firebaseUser) {
+      if (!firebaseUser) {
+        currentUser = null;
+        stopCloudListeners();
+        cloudDataReady = false;
+        showAuthScreen();
+        switchAuthRole('student');
+        return;
+      }
+
+      if (isFirebaseStaff(firebaseUser)) {
+        currentUser = { uid: firebaseUser.uid, role: 'staff', roll: 'staff101', name: 'Master Chef (Staff)', email: firebaseUser.email };
+        await ensureInitialCloudData();
+      } else {
+        const profileSnap = await cloudDb.collection('users').doc(firebaseUser.uid).get();
+        if (!profileSnap.exists || profileSnap.data().role !== 'student') {
+          await fbAuth.signOut();
+          showToast('Profile Missing', 'Student profile nahi mila. Register flow se account banao.', 'error');
+          return;
+        }
+        currentUser = { uid: firebaseUser.uid, ...profileSnap.data() };
+      }
+
+      await startRealtimeCloudListeners();
+      cloudBootstrapped = true;
+      const screen = document.getElementById('authScreen');
+      if (screen) screen.classList.add('hidden');
+      const card = document.getElementById('authCard');
+      if (card) card.classList.remove('dismiss-auth');
+      renderDashboardForCurrentRole();
+      if (currentUser.role === 'student' && menuItems.length === 0) {
+        showToast('Canteen Setup Needed', 'Staff portal se ek baar sign in karke menu initialize karo.', 'warning');
+      }
+    }
+
+    async function startRealtimeCloudListeners() {
+      stopCloudListeners();
+      cloudDataReady = false;
+
+      const menuUnsub = cloudDb.collection('menuItems').onSnapshot(snapshot => {
+        if (snapshot.empty) {
+          menuItems = [...INITIAL_MENU]; // display-only fallback; orders require live Firestore menu records
+        } else {
+          menuItems = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+          menuItems.sort((a, b) => String(a.category).localeCompare(String(b.category)) || String(a.name).localeCompare(String(b.name)));
+        }
+        cloudDataReady = true;
+        if (currentUser) {
+          if (currentUser.role === 'student') {
+            renderStudentCatalog(); renderTrayUI(); renderStudentMetrics(); renderStudentPersonalOrders();
+          } else {
+            renderStaffStockTable();
+          }
+        }
+      }, error => showToast('Menu Sync Error', cloudErrorMessage(error), 'error'));
+      cloudUnsubscribers.push(menuUnsub);
+
+      let orderQuery = cloudDb.collection('orders');
+      if (currentUser.role === 'student') orderQuery = orderQuery.where('studentUid', '==', currentUser.uid);
+      const ordersUnsub = orderQuery.onSnapshot(snapshot => {
+        orders = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+        orders.sort((a, b) => Number(b.token || 0) - Number(a.token || 0));
+        const maxToken = orders.reduce((max, order) => Math.max(max, Number(order.token || 100)), 100);
+        orderCounter = Math.max(orderCounter, maxToken + 1);
+
+        if (currentUser && currentUser.role === 'staff') {
+          const activeCount = orders.filter(order => order.status !== 'Collected').length;
+          const level = activeCount >= 10 ? 'High' : activeCount >= 5 ? 'Medium' : 'Low';
+          globalActiveCount = activeCount;
+          cloudDb.collection('stats').doc('rush').set({ activeCount, level, updatedAtMs: Date.now() }, { merge: true })
+            .catch(error => console.warn('Rush stats sync:', error));
+          renderStaffOrdersQueue(); updateStaffAnalytics(); updateRushMeterUI();
+        } else {
+          renderStudentMetrics(); renderStudentPersonalOrders(); updateRushMeterUI();
+        }
+      }, error => showToast('Orders Sync Error', cloudErrorMessage(error), 'error'));
+      cloudUnsubscribers.push(ordersUnsub);
+
+      const statsUnsub = cloudDb.collection('stats').doc('rush').onSnapshot(snapshot => {
+        if (snapshot.exists) {
+          globalActiveCount = Math.max(0, Number(snapshot.data().activeCount || 0));
+          updateRushMeterUI();
+        }
+      }, error => console.warn('Rush stats listener:', error));
+      cloudUnsubscribers.push(statsUnsub);
+
+      const notificationsQuery = cloudDb.collection('notifications').where('userId', '==', currentUser.uid);
+      notificationUnsubscribe = notificationsQuery.onSnapshot(snapshot => {
+        cloudNotifications = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+        cloudNotifications.sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0));
+        renderNotifications();
+      }, error => {
+        console.warn('Notification sync:', error);
+        renderNotifications();
+      });
+    }
+
+    async function createCloudNotification(userId, title, message, orderId = '') {
+      if (!userId) return;
+      await cloudDb.collection('notifications').add({
+        userId, title, message, orderId, read: false, createdAtMs: Date.now()
+      });
+    }
+
+    // Firebase owns login persistence; do not write passwords/users into localStorage.
+    function initAppState() {
+      menuItems = [...INITIAL_MENU];
+      orders = [];
+      studentUsers = [];
+      currentUser = null;
+    }
+
+    function saveStorage() {
+      // No-op by design: all mutable app data is written to Firestore by the action handlers below.
+    }
+
+    function fillDemoStudent() {
+      document.getElementById('inputStudentRoll').value = 'CS2024-001';
+      document.getElementById('inputStudentPass').value = 'Demo@12345';
+      showToast('Demo Login', 'First time? Register this Roll ID and choose your own password.', 'info');
+    }
+
+    async function handleStudentAuthSubmit() {
+      const roll = (document.getElementById('inputStudentRoll').value || '').trim();
+      const pass = (document.getElementById('inputStudentPass').value || '').trim();
+      if (!roll || !pass) return showToast('Missing Fields', 'Roll Number aur password enter karo.', 'warning');
+      if (pass.length < 6) return showToast('Password Too Short', 'Firebase ke liye password kam se kam 6 characters ka hona chahiye.', 'warning');
+
+      authActionInProgress = true;
+      let signedUser = null;
+      try {
+        const email = studentEmailFromRoll(roll);
+        if (isStudentSignUp) {
+          const name = (document.getElementById('inputStudentName').value || '').trim();
+          if (!name) throw new Error('Registration ke liye full name enter karo.');
+          const credential = await fbAuth.createUserWithEmailAndPassword(email, pass);
+          signedUser = credential.user;
+          const profile = { uid: signedUser.uid, role: 'student', roll, name, createdAtMs: Date.now() };
+          await cloudDb.collection('users').doc(signedUser.uid).set(profile);
+          currentUser = profile;
+          showToast('Account Created', `Welcome, ${name}! Your account is saved in Firebase.`, 'success');
+        } else {
+          const credential = await fbAuth.signInWithEmailAndPassword(email, pass);
+          signedUser = credential.user;
+          if (isFirebaseStaff(signedUser)) throw new Error('Staff portal ke liye Staff tab use karo.');
+          const profileSnap = await cloudDb.collection('users').doc(signedUser.uid).get();
+          if (!profileSnap.exists || profileSnap.data().role !== 'student') throw new Error('Student profile nahi mila. Register flow use karo.');
+          currentUser = { uid: signedUser.uid, ...profileSnap.data() };
+          showToast('Login Successful', `Welcome back, ${currentUser.name}!`, 'success');
+        }
+        await hydrateSignedInUser(signedUser);
+        executeLoginTransition();
+      } catch (error) {
+        if (signedUser && !currentUser) { try { await fbAuth.signOut(); } catch (_) {} }
+        showToast('Student Login Failed', cloudErrorMessage(error), 'error');
+      } finally {
+        authActionInProgress = false;
+      }
+    }
+
+    async function handleStaffLogin() {
+      const id = (document.getElementById('inputStaffId').value || '').trim().toLowerCase();
+      const pass = (document.getElementById('inputStaffPass').value || '').trim();
+      if (id !== 'staff101' || !pass) return showToast('Access Denied', 'Configured staff ID staff101 aur Firebase Auth password use karo.', 'error');
+      authActionInProgress = true;
+      let signedUser = null;
+      try {
+        const credential = await fbAuth.signInWithEmailAndPassword(STAFF_AUTH_EMAIL, pass);
+        signedUser = credential.user;
+        if (!isFirebaseStaff(signedUser)) throw new Error('This account is not authorized as staff.');
+        currentUser = { uid: signedUser.uid, role: 'staff', roll: 'staff101', name: 'Master Chef (Staff)', email: signedUser.email };
+        await ensureInitialCloudData();
+        await hydrateSignedInUser(signedUser);
+        executeLoginTransition();
+        showToast('Kitchen Authorized', 'Shared Firestore menu and orders loaded.', 'success');
+      } catch (error) {
+        showToast('Staff Login Failed', cloudErrorMessage(error) + ' Firebase Authentication mein staff account create karo.', 'error');
+      } finally {
+        authActionInProgress = false;
+      }
+    }
+
+    function handleLogout() {
+      stopCloudListeners();
+      currentUser = null;
+      cloudNotifications = [];
+      fbAuth.signOut().catch(error => console.warn('Sign out:', error));
+      const authScreen = document.getElementById('authScreen');
+      const authCard = document.getElementById('authCard');
+      authCard.classList.remove('dismiss-auth');
+      authScreen.classList.remove('hidden');
+      document.getElementById('inputStudentRoll').value = '';
+      document.getElementById('inputStudentPass').value = '';
+      document.getElementById('inputStudentName').value = '';
+      document.getElementById('notificationPanel').classList.add('hidden');
+      showToast('Logged Out', 'You have securely exited the canteen portal.', 'info');
+    }
+
+    function calculateRushState() {
+      const count = Number.isFinite(globalActiveCount) ? globalActiveCount : orders.filter(o => o.status !== 'Collected').length;
+      let level = 'Low';
+      let badgeClass = 'bg-emerald-100 text-emerald-800 border-emerald-200';
+      let waitText = 'Wait: ~3-5 mins';
+      let needleDeg = -75 + (count * 12);
+      if (count >= 10) {
+        level = 'High'; badgeClass = 'bg-rose-100 text-rose-800 border-rose-300 rush-high-glow';
+        waitText = 'Wait: ~20-30 mins (Peak)'; needleDeg = 75;
+      } else if (count >= 5) {
+        level = 'Medium'; badgeClass = 'bg-amber-100 text-amber-800 border-amber-200';
+        waitText = 'Wait: ~10-15 mins'; needleDeg = 0;
+      } else {
+        needleDeg = Math.min(75, -75 + (count * 12));
+      }
+      return { count, level, badgeClass, waitText, needleDeg };
+    }
+
+    async function submitStudentOrder(payMode = 'UPI') {
+      if (!currentUser || currentUser.role !== 'student') return showToast('Login Required', 'Order place karne ke liye student login karo.', 'warning');
+      const keys = Object.keys(studentCart);
+      if (!keys.length) return;
+
+      const itemRefs = keys.map(k => cloudDb.collection('menuItems').doc(k));
+      const counterRef = cloudDb.collection('counters').doc('orders');
+      const statsRef = cloudDb.collection('stats').doc('rush');
+      const orderRef = cloudDb.collection('orders').doc();
+      let newOrder = null;
+
+      try {
+        await cloudDb.runTransaction(async transaction => {
+          const refs = [counterRef, statsRef, ...itemRefs];
+          const snapshots = await Promise.all(refs.map(ref => transaction.get(ref)));
+          const counterSnap = snapshots[0];
+          const statsSnap = snapshots[1];
+          if (!counterSnap.exists || !statsSnap.exists) throw new Error('Please ask canteen staff to sign in once and initialize the menu first.');
+
+          const checkedItems = [];
+          let totalPrice = 0;
+          for (let i = 0; i < keys.length; i++) {
+            const itemSnap = snapshots[i + 2];
+            if (!itemSnap.exists) throw new Error('A menu item is not available in Firebase. Refresh and retry.');
+            const item = itemSnap.data();
+            if (!item.available) throw new Error(`${item.name} is now unavailable. Remove it from your cart.`);
+            const cartLine = studentCart[keys[i]];
+            const qty = Math.max(1, Math.floor(Number(cartLine.qty || 1)));
+            const price = Number(item.price);
+            checkedItems.push({ id: itemSnap.id, name: item.name, price, qty });
+            totalPrice += price * qty;
+          }
+          const token = Number(counterSnap.data().lastToken || 100) + 1;
+          const currentActive = Math.max(0, Number(statsSnap.data().activeCount || 0));
+          const nextActive = currentActive + 1;
+          newOrder = {
+            id: orderRef.id, token, studentUid: currentUser.uid, studentRoll: currentUser.roll,
+            studentName: currentUser.name, items: checkedItems, totalPrice,
+            paymentMode: payMode, paymentStatus: 'Pending',
+            status: 'New', createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            createdAtMs: Date.now()
+          };
+          transaction.set(counterRef, { lastToken: token }, { merge: true });
+          transaction.set(orderRef, newOrder);
+          const level = nextActive >= 10 ? 'High' : nextActive >= 5 ? 'Medium' : 'Low';
+          transaction.set(statsRef, { activeCount: nextActive, level, updatedAtMs: Date.now() }, { merge: true });
+        });
+
+        studentCart = {};
+        renderTrayUI(); renderStudentCatalog();
+        document.getElementById('popupTokenNum').textContent = newOrder.token;
+        document.getElementById('popupTotalAmount').textContent = `₹${newOrder.totalPrice}`;
+        document.getElementById('popupPaymentMode').textContent = payMode === 'UPI' ? 'UPI selected (verify payment separately)' : 'Cash at Counter (Pending)';
+        document.getElementById('orderSuccessModal').classList.remove('hidden');
+        await createCloudNotification(currentUser.uid, `Order #${newOrder.token} placed`, 'Your order has been sent to the canteen kitchen.', newOrder.id);
+        showToast('Order Dispatched!', `Token #${newOrder.token} saved to Firebase.`, 'success');
+      } catch (error) {
+        showToast('Order Failed', cloudErrorMessage(error), 'error');
+      }
+    }
+
+    async function updateOrderStatus(orderId, newStatus) {
+      if (!currentUser || currentUser.role !== 'staff') return showToast('Staff Only', 'Only canteen staff can update order status.', 'error');
+      const allowed = ['New', 'Preparing', 'Ready', 'Collected'];
+      if (!allowed.includes(newStatus)) return showToast('Invalid Status', 'Unknown order status.', 'error');
+      const orderRef = cloudDb.collection('orders').doc(orderId);
+      const statsRef = cloudDb.collection('stats').doc('rush');
+      let updatedOrder = null;
+      try {
+        await cloudDb.runTransaction(async transaction => {
+          const orderSnap = await transaction.get(orderRef);
+          const statsSnap = await transaction.get(statsRef);
+          if (!orderSnap.exists) throw new Error('Order no longer exists. Refresh and retry.');
+          const oldOrder = orderSnap.data();
+          const before = oldOrder.status !== 'Collected' ? 1 : 0;
+          const after = newStatus !== 'Collected' ? 1 : 0;
+          updatedOrder = { ...oldOrder, status: newStatus };
+          transaction.update(orderRef, { status: newStatus, updatedAtMs: Date.now() });
+          if (before !== after && statsSnap.exists) {
+            const count = Math.max(0, Number(statsSnap.data().activeCount || 0) + after - before);
+            const level = count >= 10 ? 'High' : count >= 5 ? 'Medium' : 'Low';
+            transaction.set(statsRef, { activeCount: count, level, updatedAtMs: Date.now() }, { merge: true });
+          }
+        });
+        if (updatedOrder && updatedOrder.studentUid) {
+          await createCloudNotification(updatedOrder.studentUid, `Order #${updatedOrder.token}: ${newStatus}`, `Your canteen order is now marked ${newStatus}.`, orderId);
+        }
+        showToast('Order Shifted', `Token marked as ${newStatus}.`, 'success');
+      } catch (error) {
+        showToast('Status Update Failed', cloudErrorMessage(error), 'error');
+      }
+    }
+
+    async function markCashCollected(orderId) {
+      if (!currentUser || currentUser.role !== 'staff') return;
+      const order = orders.find(o => o.id === orderId);
+      if (!order) return;
+      try {
+        await cloudDb.collection('orders').doc(orderId).update({ paymentStatus: 'Paid', paymentUpdatedAtMs: Date.now() });
+        if (order.studentUid) await createCloudNotification(order.studentUid, `Payment received for #${order.token}`, `Cash payment of ₹${order.totalPrice} was recorded by the canteen.`, orderId);
+        showToast('Cash Collected', `₹${order.totalPrice} marked Paid for Token #${order.token}`, 'success');
+      } catch (error) { showToast('Payment Update Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    async function toggleStockAvailability(itemId) {
+      if (!currentUser || currentUser.role !== 'staff') return;
+      const item = menuItems.find(m => m.id === itemId);
+      if (!item) return;
+      const nextAvailable = !item.available;
+      try {
+        await cloudDb.collection('menuItems').doc(itemId).update({ available: nextAvailable, updatedAtMs: Date.now() });
+        if (!nextAvailable && studentCart[itemId]) delete studentCart[itemId];
+        showToast(nextAvailable ? 'Stock Available' : 'Item Unavailable', nextAvailable ? `"${item.name}" is now in stock.` : `"${item.name}" is unavailable to new orders.`, nextAvailable ? 'success' : 'warning');
+      } catch (error) { showToast('Stock Update Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    async function saveNewDish() {
+      if (!currentUser || currentUser.role !== 'staff') return;
+      const name = (document.getElementById('newDishName').value || '').trim();
+      const price = parseFloat(document.getElementById('newDishPrice').value);
+      const category = document.getElementById('newDishCat').value;
+      let image = (document.getElementById('newDishImage').value || '').trim();
+      const desc = (document.getElementById('newDishDesc').value || '').trim() || 'Fresh canteen preparation';
+      if (!name || !Number.isFinite(price) || price <= 0) return showToast('Invalid Input', 'Valid dish name and price enter karo.', 'warning');
+      if (!image) image = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80';
+      const id = `dish-${Date.now()}`;
+      const dish = { id, name, category, price, available: true, desc, image, createdAtMs: Date.now() };
+      try {
+        await cloudDb.collection('menuItems').doc(id).set(dish);
+        ['newDishName','newDishPrice','newDishImage','newDishDesc'].forEach(inputId => document.getElementById(inputId).value = '');
+        closeNewDishModal();
+        showToast('Dish Added', `"${name}" saved to Firebase and added to the menu.`, 'success');
+      } catch (error) { showToast('Dish Save Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    async function injectJudgeSurge(qty) {
+      if (!currentUser || currentUser.role !== 'staff') return;
+      const names = ['Pooja', 'Tanmay', 'Ishaan', 'Devansh', 'Kunal', 'Sanya', 'Vikram', 'Meera'];
+      const available = menuItems.filter(m => m.available);
+      if (!available.length) return showToast('Error', 'No available items in stock.', 'error');
+      try {
+        const batch = cloudDb.batch();
+        for (let i = 0; i < qty; i++) {
+          const dish = available[Math.floor(Math.random() * available.length)];
+          const token = `demo-${Date.now()}-${i}`;
+          const orderRef = cloudDb.collection('orders').doc(token);
+          batch.set(orderRef, {
+            id: token, token: Number(String(Date.now()).slice(-6)) + i,
+            studentUid: 'demo', studentRoll: `DEMO-${1000 + i}`,
+            studentName: names[Math.floor(Math.random() * names.length)] + ` (Demo ${i + 1})`,
+            items: [{ id: dish.id, name: dish.name, price: dish.price, qty: 1 }], totalPrice: dish.price,
+            paymentMode: i % 2 === 0 ? 'UPI' : 'CASH', paymentStatus: i % 2 === 0 ? 'Paid' : 'Pending',
+            status: i % 3 === 0 ? 'New' : 'Preparing', createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), createdAtMs: Date.now() + i, isDemo: true
+          });
+        }
+        await batch.commit();
+        showToast('Surge Activated!', `Added ${qty} demo orders in Firestore.`, 'info');
+      } catch (error) { showToast('Demo Surge Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    async function resetAllDemoData() {
+      if (!currentUser || currentUser.role !== 'staff') return;
+      if (!confirm('Reset Firestore demo data? All current orders and menu items will be replaced.')) return;
+      try {
+        const ordersSnap = await cloudDb.collection('orders').get();
+        const menuSnap = await cloudDb.collection('menuItems').get();
+        const docsToDelete = [...ordersSnap.docs, ...menuSnap.docs];
+        for (let offset = 0; offset < docsToDelete.length; offset += 400) {
+          const batch = cloudDb.batch();
+          docsToDelete.slice(offset, offset + 400).forEach(doc => batch.delete(doc.ref));
+          await batch.commit();
+        }
+        const seedBatch = cloudDb.batch();
+        INITIAL_MENU.forEach(item => seedBatch.set(cloudDb.collection('menuItems').doc(item.id), item));
+        seedBatch.set(cloudDb.collection('counters').doc('orders'), { lastToken: 100 });
+        seedBatch.set(cloudDb.collection('stats').doc('rush'), { activeCount: 0, level: 'Low', updatedAtMs: Date.now() });
+        await seedBatch.commit();
+        showToast('Demo Data Reset', 'Menu restored; orders cleared in Firestore.', 'success');
+      } catch (error) { showToast('Reset Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    function escapeHtml(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+    }
+
+    function renderNotifications() {
+      const list = document.getElementById('notificationsList');
+      const badge = document.getElementById('notificationUnreadBadge');
+      if (!list || !badge) return;
+      const unread = cloudNotifications.filter(item => !item.read).length;
+      badge.textContent = unread > 99 ? '99+' : String(unread);
+      badge.classList.toggle('hidden', unread === 0);
+      badge.classList.toggle('flex', unread > 0);
+      if (!currentUser) {
+        list.innerHTML = '<p class="py-8 text-center text-xs text-slate-400">Sign in to see notifications.</p>';
+        return;
+      }
+      if (!cloudNotifications.length) {
+        list.innerHTML = '<p class="py-8 text-center text-xs text-slate-400"><i class="fa-regular fa-bell-slash text-2xl block mb-2"></i>No notifications yet.</p>';
+        return;
+      }
+      list.innerHTML = cloudNotifications.slice(0, 60).map(item => `
+        <button onclick="markNotificationRead('${escapeHtml(item.id)}')" class="w-full text-left p-3 rounded-xl border ${item.read ? 'border-slate-100 bg-white' : 'border-orange-200 bg-orange-50'} hover:border-orange-300 transition-colors">
+          <div class="flex items-start gap-2"><i class="fa-solid fa-${item.read ? 'check' : 'bell'} mt-0.5 text-orange-600"></i><div class="min-w-0 flex-1"><p class="text-xs font-extrabold text-slate-800">${escapeHtml(item.title)}</p><p class="text-[11px] text-slate-600 mt-1">${escapeHtml(item.message)}</p><p class="text-[10px] text-slate-400 mt-1">${new Date(Number(item.createdAtMs || Date.now())).toLocaleString()}</p></div></div>
+        </button>`).join('');
+    }
+
+    function toggleNotificationPanel() {
+      const panel = document.getElementById('notificationPanel');
+      panel.classList.toggle('hidden');
+    }
+
+    async function markNotificationRead(notificationId) {
+      if (!currentUser) return;
+      try { await cloudDb.collection('notifications').doc(notificationId).update({ read: true }); }
+      catch (error) { showToast('Notification Update Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    async function markAllNotificationsRead() {
+      if (!currentUser) return;
+      const unread = cloudNotifications.filter(item => !item.read);
+      try {
+        for (let offset = 0; offset < unread.length; offset += 400) {
+          const batch = cloudDb.batch();
+          unread.slice(offset, offset + 400).forEach(item => batch.update(cloudDb.collection('notifications').doc(item.id), { read: true }));
+          await batch.commit();
+        }
+      } catch (error) { showToast('Notification Update Failed', cloudErrorMessage(error), 'error'); }
+    }
+
+    window.onload = function () {
+      initAppState();
+      globalActiveCount = 0;
+      updateRushMeterUI();
+      switchAuthRole('student');
+      fbAuth.onAuthStateChanged(async firebaseUser => {
+        if (authActionInProgress) return;
+        if (!firebaseUser) {
+          currentUser = null; stopCloudListeners(); cloudNotifications = [];
+          renderNotifications(); showAuthScreen(); return;
+        }
+        try {
+          await hydrateSignedInUser(firebaseUser);
+        } catch (error) {
+          console.error('Firebase startup failed:', error);
+          showToast('Firebase Setup Error', cloudErrorMessage(error), 'error');
+          showAuthScreen();
+        }
+      });
+    };
+
+  </script>
+</body>
+</html>

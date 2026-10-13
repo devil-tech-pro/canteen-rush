@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isStaff() {
+      return signedIn() && request.auth.token.email == 'staff101@staff.canteenpulse.com';
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isStaff());
+      allow list: if isStaff();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'student'
+        && request.resource.data.uid == uid
+        && request.resource.data.roll is string
+        && request.resource.data.name is string;
+      allow update: if isStaff() || (signedIn()
+        && request.auth.uid == uid
+        && resource.data.role == 'student'
+        && request.resource.data.role == 'student'
+        && request.resource.data.uid == uid);
+      allow delete: if isStaff();
+    }
+
+    match /menuItems/{itemId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isStaff();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isStaff() || (signedIn() && resource.data.studentUid == request.auth.uid);
+      allow create: if isStaff() || (signedIn()
+        && request.resource.data.studentUid == request.auth.uid
+        && request.resource.data.status == 'New'
+        && request.resource.data.paymentMode in ['UPI', 'CASH']
+        && request.resource.data.totalPrice is number
+        && request.resource.data.items is list);
+      allow update, delete: if isStaff();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isStaff() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isStaff() || (signedIn() && request.resource.data.userId == request.auth.uid);
+      allow update: if isStaff() || (signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']));
+      allow delete: if isStaff() || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /stats/rush {
+      allow read: if signedIn();
+      allow create: if isStaff();
+      // Prototype rule: students may only move the shared counter by one when placing an order.
+      // Production deployments should update this aggregate through a trusted Cloud Function.
+      allow update: if isStaff() || (signedIn()
+        && request.resource.data.activeCount is int
+        && (request.resource.data.activeCount == resource.data.activeCount + 1
+          || request.resource.data.activeCount == resource.data.activeCount - 1)
+        && request.resource.data.level in ['Low', 'Medium', 'High']);
+      allow delete: if isStaff();
+    }
+
+    match /counters/orders {
+      allow read: if signedIn();
+      allow create, delete: if isStaff();
+      allow update: if isStaff() || (signedIn()
+        && request.resource.data.lastToken is int
+        && request.resource.data.lastToken == resource.data.lastToken + 1);
+    }
+  }
+}
