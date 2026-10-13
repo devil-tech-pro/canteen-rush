@@ -267,8 +267,19 @@
         <!-- Live Cloud DB Connection Status Indicator -->
         <div id="cloudStatusIndicator" class="hidden xs:flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
           <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span id="cloudStatusText">Firestore Ready</span>
+          <span id="cloudStatusText">Firestore Live</span>
         </div>
+
+        <!-- Manual Instant Refresh Button -->
+        <button onclick="manualRefreshData()" title="Sync / Refresh Data" class="flex items-center space-x-1.5 px-2.5 py-1.5 bg-slate-100 hover:bg-orange-50 hover:text-orange-600 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition-all shadow-sm">
+          <i id="btnRefreshIcon" class="fa-solid fa-arrows-rotate text-xs"></i>
+          <span class="hidden sm:inline text-[11px]">Sync</span>
+        </button>
+
+        <!-- Sound Toggle Button -->
+        <button id="btnSoundToggle" onclick="toggleAudioAlerts()" title="Toggle Notification Audio" class="p-2 bg-slate-100 hover:bg-orange-50 text-slate-600 hover:text-orange-600 rounded-xl border border-slate-200 transition-all text-xs">
+          <i id="soundToggleIcon" class="fa-solid fa-volume-high text-emerald-600"></i>
+        </button>
 
         <div class="text-right hidden sm:block">
           <span id="headerUserName" class="text-xs font-bold text-slate-800 leading-tight block">Student</span>
@@ -925,6 +936,170 @@
     let isStudentSignUp = false;
     let selectedPayMode = 'UPI';
 
+    /* =========================================================================
+       AUDIO CHIMES (WEB AUDIO API - ZERO EXTERNAL URL DEPENDENCY)
+       ========================================================================= */
+    let audioCtx = null;
+    let isAudioMuted = false;
+
+    function getAudioContext() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (AudioContextClass) {
+          audioCtx = new AudioContextClass();
+        }
+      }
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      return audioCtx;
+    }
+
+    window.toggleAudioAlerts = function() {
+      isAudioMuted = !isAudioMuted;
+      const icon = document.getElementById('soundToggleIcon');
+      if (icon) {
+        if (isAudioMuted) {
+          icon.className = 'fa-solid fa-volume-xmark text-rose-500';
+          showToast("Sound Muted", "Notification chimes turned off.", "warning");
+        } else {
+          icon.className = 'fa-solid fa-volume-high text-emerald-600';
+          playChimeSound('staffNewOrder');
+          showToast("Sound On", "Notification chimes enabled!", "success");
+        }
+      }
+    };
+
+    function playChimeSound(type = 'staffNewOrder') {
+      if (isAudioMuted) return;
+      try {
+        const ctx = getAudioContext();
+        if (!ctx) return;
+
+        const now = ctx.currentTime;
+        if (type === 'staffNewOrder') {
+          // Energetic Kitchen Ding-Dong: Note 1 (587Hz / D5), Note 2 (880Hz / A5)
+          const osc1 = ctx.createOscillator();
+          const gain1 = ctx.createGain();
+          osc1.type = 'triangle';
+          osc1.frequency.setValueAtTime(587.33, now);
+          gain1.gain.setValueAtTime(0.35, now);
+          gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+          osc1.connect(gain1);
+          gain1.connect(ctx.destination);
+          osc1.start(now);
+          osc1.stop(now + 0.35);
+
+          const osc2 = ctx.createOscillator();
+          const gain2 = ctx.createGain();
+          osc2.type = 'sine';
+          osc2.frequency.setValueAtTime(880, now + 0.18);
+          gain2.gain.setValueAtTime(0.4, now + 0.18);
+          gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+          osc2.connect(gain2);
+          gain2.connect(ctx.destination);
+          osc2.start(now + 0.18);
+          osc2.stop(now + 0.65);
+        } else if (type === 'studentFoodReady') {
+          // Melodic Pick-Up Bell: Chord (C5 523Hz -> E5 659Hz -> G5 784Hz)
+          [523.25, 659.25, 783.99].forEach((freq, idx) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, now + (idx * 0.12));
+            gain.gain.setValueAtTime(0.3, now + (idx * 0.12));
+            gain.gain.exponentialRampToValueAtTime(0.001, now + (idx * 0.12) + 0.5);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(now + (idx * 0.12));
+            osc.stop(now + (idx * 0.12) + 0.5);
+          });
+        }
+      } catch (err) {
+        console.warn("Audio chime prevented by browser gesture policy:", err);
+      }
+    }
+
+    // Instant cross-tab sync channel
+    let liveBroadcast = null;
+    try {
+      if (window.BroadcastChannel) {
+        liveBroadcast = new BroadcastChannel('cyberhunt_canteen_channel');
+        liveBroadcast.onmessage = (event) => {
+          if (event.data?.type === 'SYNC_ORDERS') {
+            syncIncomingOrders(event.data.orders, event.data.source);
+          }
+        };
+      }
+    } catch(e) {}
+
+    let knownOrderMap = new Map();
+
+    function syncIncomingOrders(newOrdersList, source = 'cloud') {
+      if (!Array.isArray(newOrdersList)) return;
+
+      // Check for alerts before updating the state
+      if (knownOrderMap.size > 0) {
+        newOrdersList.forEach(incoming => {
+          const previous = knownOrderMap.get(incoming.id);
+
+          // 1. Kitchen Alert: A new order arrived that kitchen didn't have
+          if (!previous && currentUser?.role === 'staff') {
+            playChimeSound('staffNewOrder');
+            showToast("🔔 New Kitchen Order!", `Token #${incoming.token} from ${incoming.studentName} (₹${incoming.totalPrice})`, "warning");
+          }
+
+          // 2. Student Alert: Order status turned to 'Ready'
+          if (previous && previous.status !== 'Ready' && incoming.status === 'Ready' && isMyOrder(incoming, currentUser)) {
+            playChimeSound('studentFoodReady');
+            showToast("🎉 Food Hot & Ready!", `Token #${incoming.token} is ready for pick-up at the counter!`, "success");
+          }
+        });
+      }
+
+      // Update map of known orders
+      knownOrderMap.clear();
+      newOrdersList.forEach(o => knownOrderMap.set(o.id, { ...o }));
+
+      orders = newOrdersList;
+      saveLocal();
+      updateRushMeterUI();
+
+      if (currentUser?.role === 'student') {
+        renderStudentMetrics();
+        renderStudentPersonalOrders();
+      } else if (currentUser?.role === 'staff') {
+        renderStaffOrdersQueue();
+        updateStaffAnalytics();
+      }
+    }
+
+    window.manualRefreshData = async function() {
+      const icon = document.getElementById('btnRefreshIcon');
+      if (icon) icon.classList.add('fa-spin');
+
+      try {
+        if (db && isFirebaseReady) {
+          const snapshot = await getDocs(collection(db, "orders"));
+          const cloudOrders = [];
+          snapshot.forEach(docSnap => cloudOrders.push(docSnap.data()));
+          cloudOrders.sort((a, b) => (b.token || 0) - (a.token || 0));
+          syncIncomingOrders(cloudOrders, 'manual');
+        } else {
+          // Re-read local storage
+          const savedOrders = localStorage.getItem(STORAGE_KEY_ORDERS);
+          if (savedOrders) syncIncomingOrders(JSON.parse(savedOrders), 'local');
+        }
+        showToast("Live Sync Complete", "Synced with kitchen cloud server.", "success");
+      } catch (err) {
+        console.warn("Manual refresh fallback:", err);
+      } finally {
+        setTimeout(() => {
+          if (icon) icon.classList.remove('fa-spin');
+        }, 600);
+      }
+    };
+
     function isMyOrder(order, user) {
       if (!order || !user) return false;
       const uEmail = (user.email || '').toLowerCase().trim();
@@ -1542,6 +1717,11 @@
       studentCart = {};
       saveLocal();
 
+      // Broadcast across tabs instantly
+      if (liveBroadcast) {
+        liveBroadcast.postMessage({ type: 'SYNC_ORDERS', orders: orders, source: 'student' });
+      }
+
       renderTrayUI();
       renderStudentCatalog();
       renderStudentMetrics();
@@ -1555,6 +1735,7 @@
 
       showToast("Order Dispatched!", `Token #${newOrder.token} sent to Kitchen.`, "success");
 
+      // Write to Firestore immediately
       try {
         if (db && isFirebaseReady) {
           await setDoc(doc(db, "orders", newOrder.id), newOrder);
@@ -1725,8 +1906,14 @@
       const order = orders.find(o => o.id === orderId);
       if (!order) return;
 
+      const previousStatus = order.status;
       order.status = newStatus;
       saveLocal();
+
+      // Broadcast immediately across all open tabs
+      if (liveBroadcast) {
+        liveBroadcast.postMessage({ type: 'SYNC_ORDERS', orders: orders, source: 'staff' });
+      }
 
       renderStaffOrdersQueue();
       updateStaffAnalytics();
@@ -2024,21 +2211,28 @@
               const cloudOrders = [];
               snapshot.forEach(docSnap => cloudOrders.push(docSnap.data()));
               cloudOrders.sort((a, b) => (b.token || 0) - (a.token || 0));
-              orders = cloudOrders;
-              localStorage.setItem(STORAGE_KEY_ORDERS, JSON.stringify(orders));
-            }
-            updateRushMeterUI();
-            if (currentUser?.role === 'student') {
-              renderStudentMetrics();
-              renderStudentPersonalOrders();
-            } else if (currentUser?.role === 'staff') {
-              renderStaffOrdersQueue();
-              updateStaffAnalytics();
+              syncIncomingOrders(cloudOrders, 'cloud');
             }
           }, (err) => console.warn("Orders listener fallback:", err));
 
+          // Background auto-sync polling every 3 seconds to guarantee zero drop
+          setInterval(async () => {
+            try {
+              if (db && isFirebaseReady) {
+                const snap = await getDocs(collection(db, "orders"));
+                if (!snap.empty) {
+                  const cloudOrders = [];
+                  snap.forEach(d => cloudOrders.push(d.data()));
+                  cloudOrders.sort((a, b) => (b.token || 0) - (a.token || 0));
+                  syncIncomingOrders(cloudOrders, 'poll');
+                }
+              }
+            } catch(e) {}
+          }, 3000);
         } catch (err) {
-          console.warn("Firebase Auth fallback enabled:", err);
+          console.warn("Firebase Auth / Firestore offline fallback:", err);
+          const ind = document.getElementById('cloudStatusText');
+          if (ind) ind.textContent = "Local Synced";
         }
       }
 
