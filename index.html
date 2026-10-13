@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Cyberhunt CanteenPulse | Smart Canteen Order & Rush Tracker</title>
+  <title>JMS CanteenPulse | Smart Canteen Order & Rush Tracker</title>
   
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -187,7 +187,7 @@
         <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl sunset-gradient p-1 shadow-lg shadow-orange-500/35 mb-3">
           <img src="logo.png" alt="Logo" class="w-full h-full object-contain rounded-xl" onerror="this.onerror=null; this.src=''; this.parentElement.innerHTML='<i class=\'fa-solid fa-bowl-food text-white text-2xl\'></i>';">
         </div>
-        <h1 class="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight">Cyberhunt Canteen</h1>
+        <h1 class="text-2xl sm:text-3xl font-display font-black text-slate-900 tracking-tight">JMS Canteen</h1>
         <p class="text-xs sm:text-sm text-slate-500 mt-1">Smart Kitchen Orders & Real-time Rush Tracker</p>
       </div>
 
@@ -290,7 +290,7 @@
         </div>
         <div>
           <div class="flex items-center space-x-2">
-            <span class="font-display font-black text-base sm:text-xl text-slate-900 tracking-tight">Cyberhunt Canteen</span>
+            <span class="font-display font-black text-base sm:text-xl text-slate-900 tracking-tight">JMS Canteen</span>
             <span class="text-[9px] sm:text-[10px] font-extrabold uppercase tracking-wider sunset-gradient text-white px-2 py-0.5 rounded-full shadow-sm">
               Live
             </span>
@@ -755,7 +755,7 @@
             <span id="payModalAmount" class="text-2xl font-display font-black text-slate-900">₹0</span>
           </div>
           <span class="text-[11px] font-bold bg-white text-orange-800 px-2.5 py-1 rounded-full border border-orange-200">
-            Cyberhunt Canteen
+            JMS Canteen
           </span>
         </div>
 
@@ -785,7 +785,7 @@
             <img id="upiQrImage" src="" alt="UPI QR Code" class="w-full h-full object-contain rounded-xl">
           </div>
           <div class="flex items-center justify-center space-x-3 text-xs">
-            <span class="text-slate-500 font-mono text-[11px]">canteen@cyberhunt.upi</span>
+            <span class="text-slate-500 font-mono text-[11px]">canteen@JMS.upi</span>
             <button onclick="copyUpiId()" class="text-orange-600 font-bold hover:underline text-[11px]">Copy UPI</button>
           </div>
           <a id="btnUpiIntentLink" href="#" class="block w-full py-2 sunset-gradient text-white font-bold rounded-xl text-xs shadow transition-all">
@@ -952,11 +952,11 @@
       console.warn("Firebase Init Note:", e);
     }
 
-    const STORAGE_KEY_ORDERS = 'cyberhunt_orders_v6';
-    const STORAGE_KEY_MENU = 'cyberhunt_menu_v6';
-    const STORAGE_KEY_USERS = 'cyberhunt_users_v6';
-    const STORAGE_KEY_AUTH = 'cyberhunt_current_auth_v6';
-    const STORAGE_KEY_NOTIFS = 'cyberhunt_notifs_v6';
+    const STORAGE_KEY_ORDERS = 'JMS_orders_v6';
+    const STORAGE_KEY_MENU = 'JMS_menu_v6';
+    const STORAGE_KEY_USERS = 'JMS_users_v6';
+    const STORAGE_KEY_AUTH = 'JMS_current_auth_v6';
+    const STORAGE_KEY_NOTIFS = 'JMS_notifs_v6';
 
     const INITIAL_MENU = [
       {
@@ -1782,7 +1782,7 @@
       const total = keys.reduce((sum, k) => sum + (studentCart[k].item.price * studentCart[k].qty), 0);
       document.getElementById('payModalAmount').textContent = `₹${total}`;
 
-      const upiUrl = `upi://pay?pa=canteen@cyberhunt.upi&pn=Cyberhunt%20Canteen&am=${total}&cu=INR&tn=Canteen%20Order`;
+      const upiUrl = `upi://pay?pa=canteen@JMS.upi&pn=JMS%20Canteen&am=${total}&cu=INR&tn=Canteen%20Order`;
       const qrApi = `https://quickchart.io/qr?text=${encodeURIComponent(upiUrl)}&size=200&margin=1`;
       document.getElementById('upiQrImage').src = qrApi;
       document.getElementById('btnUpiIntentLink').href = upiUrl;
@@ -1819,14 +1819,14 @@
     };
 
     window.copyUpiId = function() {
-      const upi = "canteen@cyberhunt.upi";
+      const upi = "canteen@JMS.upi";
       const dummy = document.createElement("input");
       document.body.appendChild(dummy);
       dummy.value = upi;
       dummy.select();
       document.execCommand("copy");
       document.body.removeChild(dummy);
-      showToast("UPI ID Copied", "canteen@cyberhunt.upi copied to clipboard.", "success");
+      showToast("UPI ID Copied", "canteen@JMS.upi copied to clipboard.", "success");
     };
 
     window.confirmOrderWithPayment = function() {
